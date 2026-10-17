@@ -1,22 +1,55 @@
-/* Open WebTV - 10-Foot Smart TV Media Center & Hybrid Player Application (app.js) */
-(function () {
-  'use strict';
+/**
+ * Open WebTV - Strictly Typed 10-Foot Smart TV Media Center & Hybrid Player UI (`app.ts` -> `/assets/app.js`)
+ */
 
-  var container = document.getElementById('app-root');
-  if (!container) return;
+import type { CatalogItem, WatchProgressEntry } from '../types.ts';
+import type {
+  DeepLinkTarget,
+  HybridPlayerInstance,
+  HybridPlayerOptions,
+  HybridPlayerState,
+  VideoElementLike
+} from './player.ts';
 
-  var PlayerEngine = typeof OpenWebTVPlayer !== 'undefined' ? OpenWebTVPlayer : null;
+export type FilterCategory = 'all' | 'continue' | 'favorites' | 'smb' | 'm3u' | 'open';
 
-  var allItems = [];
-  var filteredItems = [];
+export interface PlayerEngineGlobal {
+  formatTime(seconds: number): string;
+  extractDeepLinkFromEnvironment(): DeepLinkTarget | null;
+  createHybridPlayer(options?: HybridPlayerOptions): HybridPlayerInstance;
+}
+
+export interface ApiResponsePayload {
+  readonly ok?: boolean;
+  readonly items?: CatalogItem[];
+  readonly isFavorite?: boolean;
+  readonly progress?: WatchProgressEntry | null;
+}
+
+export function initMediaCenterApp(): void {
+  if (typeof document === 'undefined') {
+    return;
+  }
+
+  var rootContainer = document.getElementById('app-root');
+  if (!rootContainer) {
+    return;
+  }
+  var container: HTMLElement = rootContainer;
+
+  var win = window as unknown as { OpenWebTVPlayer?: PlayerEngineGlobal };
+  var PlayerEngine: PlayerEngineGlobal | null = win.OpenWebTVPlayer || null;
+
+  var allItems: CatalogItem[] = [];
+  var filteredItems: CatalogItem[] = [];
   var selectedIndex = 0;
-  var activeCategory = 'all'; // 'all' | 'continue' | 'favorites' | 'smb' | 'm3u' | 'open'
+  var activeCategory: FilterCategory = 'all';
   var searchQuery = '';
-  var playerInstance = null;
+  var playerInstance: HybridPlayerInstance | null = null;
   var isPlayerOpen = false;
   var lastProgressSentAt = 0;
 
-  function sendTelemetryLog(message, data) {
+  function sendTelemetryLog(message: string, data?: Record<string, unknown>): void {
     var xhr = new XMLHttpRequest();
     xhr.open(
       'GET',
@@ -29,28 +62,36 @@
     xhr.send();
   }
 
-  function postJson(url, payload, callback) {
+  function postJson(
+    url: string,
+    payload: Record<string, unknown>,
+    callback?: (status: number, resp: ApiResponsePayload | null) => void
+  ): void {
     var xhr = new XMLHttpRequest();
     xhr.open('POST', url, true);
     xhr.setRequestHeader('Content-Type', 'application/json;charset=UTF-8');
-    xhr.onreadystatechange = function () {
+    xhr.onreadystatechange = function (): void {
       if (xhr.readyState === 4) {
-        var parsed = null;
+        var parsed: ApiResponsePayload | null = null;
         try {
-          parsed = JSON.parse(xhr.responseText);
-        } catch (e) {}
+          parsed = JSON.parse(xhr.responseText) as ApiResponsePayload;
+        } catch (_e: unknown) {}
         if (callback) callback(xhr.status, parsed);
       }
     };
     xhr.send(JSON.stringify(payload || {}));
   }
 
-  function applyFilters() {
+  function applyFilters(): void {
     filteredItems = [];
-    var q = searchQuery.toLowerCase().trim();
+    var q: string = searchQuery.toLowerCase().trim();
     for (var i = 0; i < allItems.length; i++) {
       var item = allItems[i];
-      if (activeCategory === 'continue' && (!item.progress || item.progress.positionSec <= 5)) {
+      if (!item) continue;
+      if (
+        activeCategory === 'continue' &&
+        (!item.progress || item.progress.positionSec <= 5)
+      ) {
         continue;
       }
       if (activeCategory === 'favorites' && !item.isFavorite) {
@@ -66,7 +107,7 @@
         continue;
       }
       if (q) {
-        var haystack = (
+        var haystack: string = (
           item.title +
           ' ' +
           (item.subtitle || '') +
@@ -84,15 +125,17 @@
     }
   }
 
-  function buildChannelListHtml() {
+  function buildChannelListHtml(): string {
     if (filteredItems.length === 0) {
-      return '<div style="padding:18px;color:#94a3b8;font-size:14px;">No media items match this filter. Click "+ Add SMB / Stream" to mount a folder or stream.</div>';
+      return '<div style="padding:18px;color:#94a3b8;font-size:14px;">No media items match this filter. Click "+ Source" to mount an SMB folder or stream.</div>';
     }
     var html = '';
     for (var i = 0; i < filteredItems.length; i++) {
       var ch = filteredItems[i];
-      var activeClass = i === selectedIndex ? 'webtv-channel-card active' : 'webtv-channel-card';
-      var starHtml = ch.isFavorite ? '<span class="webtv-fav-star">★</span>' : '';
+      if (!ch) continue;
+      var activeClass: string =
+        i === selectedIndex ? 'webtv-channel-card active' : 'webtv-channel-card';
+      var starHtml: string = ch.isFavorite ? '<span class="webtv-fav-star">★</span>' : '';
       var progressHtml = '';
       if (ch.progress && ch.progress.percent > 0) {
         progressHtml =
@@ -121,26 +164,44 @@
     return html;
   }
 
-  function renderApp() {
+  function createFallbackItem(): CatalogItem {
+    return {
+      id: 'none',
+      title: 'No Media Found',
+      subtitle: 'Mount an SMB folder or add a stream URL',
+      description: 'Use the "+ Mount SMB / Stream" button to connect your media library.',
+      category: 'open',
+      sourceType: 'remote',
+      resolution: 'HD',
+      videoCodec: 'H.264',
+      audioCodec: 'AAC',
+      prefersAvPlay: false,
+      streamUrl: '',
+      image_ratio: '16by9',
+      image_url: '/assets/background.svg',
+      backdrop_url: '/assets/background.svg',
+      action_data: 'none',
+      is_playable: false
+    };
+  }
+
+  function renderApp(): void {
     applyFilters();
 
-    var activeItem = filteredItems[selectedIndex] ||
-      allItems[0] || {
-        id: 'none',
-        title: 'No Media Found',
-        subtitle: 'Mount an SMB folder or add a stream URL',
-        description: 'Use the "+ Add SMB / Stream" button to connect your media library.',
-        action_data: 'none',
-        image_url: ''
-      };
+    var activeItem: CatalogItem =
+      filteredItems[selectedIndex] || allItems[0] || createFallbackItem();
 
-    var hasResume = activeItem.progress && activeItem.progress.positionSec > 5;
-    var resumeLabel =
+    var hasResume = Boolean(activeItem.progress && activeItem.progress.positionSec > 5);
+    var resumeSec: number =
+      activeItem.progress && activeItem.progress.positionSec
+        ? activeItem.progress.positionSec
+        : 0;
+    var resumeLabel: string =
       hasResume && PlayerEngine
-        ? 'Resume (' + PlayerEngine.formatTime(activeItem.progress.positionSec) + ')'
+        ? 'Resume (' + PlayerEngine.formatTime(resumeSec) + ')'
         : '▶ Play Now';
 
-    var categories = [
+    var categories: Array<{ id: FilterCategory; label: string }> = [
       { id: 'all', label: 'All (' + allItems.length + ')' },
       { id: 'continue', label: 'Continue' },
       { id: 'favorites', label: '★ Favorites' },
@@ -152,7 +213,9 @@
     var tabsHtml = '';
     for (var c = 0; c < categories.length; c++) {
       var cat = categories[c];
-      var cls = cat.id === activeCategory ? 'webtv-tab-btn active' : 'webtv-tab-btn';
+      if (!cat) continue;
+      var cls: string =
+        cat.id === activeCategory ? 'webtv-tab-btn active' : 'webtv-tab-btn';
       tabsHtml +=
         '<button type="button" class="' +
         cls +
@@ -182,6 +245,9 @@
       badgesHtml += '<span class="webtv-badge">HTTP 206 Byte-Range</span>';
     }
 
+    var stageBackgroundUrl: string =
+      activeItem.backdrop_url || activeItem.image_url || '/assets/background.svg';
+
     container.innerHTML =
       '<div class="webtv-shell">' +
       '  <aside class="webtv-sidebar">' +
@@ -207,7 +273,7 @@
       '  </aside>' +
       '  <main class="webtv-main">' +
       '    <section class="webtv-stage" style="background-image: url(\'' +
-      (activeItem.image_url || '') +
+      stageBackgroundUrl +
       '\')">' +
       '      <div class="webtv-stage-overlay">' +
       '        <div class="webtv-badges">' +
@@ -241,6 +307,9 @@
       '          <div>• Active Stream: <code>' +
       (activeItem.streamUrl || 'N/A') +
       '</code></div>' +
+      '          <div>• Stage Backdrop Asset: <code>' +
+      stageBackgroundUrl +
+      '</code></div>' +
       '          <div>• Deep-Link Action: <code>' +
       activeItem.action_data +
       '</code></div>' +
@@ -249,7 +318,6 @@
         ? 'Samsung Hardware AVPlay (with HTML5 fallback)'
         : 'HTML5 Video + HTTP 206 Byte-Range') +
       '</div>' +
-      '          <div>• Smart Hub Preview: Dynamic Continue Watching + SMB Feed</div>' +
       '        </div>' +
       '      </div>' +
       '      <div class="webtv-panel">' +
@@ -264,7 +332,6 @@
       '    </section>' +
       '  </main>' +
       '</div>' +
-      /* Full-screen Video Player Modal */
       '<div id="player-modal" class="webtv-player-modal">' +
       '  <video id="webtv-video" class="webtv-video-element" crossorigin="anonymous" playsinline></video>' +
       '  <div id="webtv-subtitle-box" class="webtv-subtitle-overlay"></div>' +
@@ -294,7 +361,6 @@
       '    </div>' +
       '  </div>' +
       '</div>' +
-      /* Add SMB Share / Stream Modal */
       '<div id="source-modal" class="webtv-modal-backdrop">' +
       '  <div class="webtv-modal-card">' +
       '    <h3 style="font-size:20px;font-weight:800;">Connect SMB Share, Local Folder, or Stream URL</h3>' +
@@ -317,22 +383,27 @@
     bindDomEvents(activeItem);
   }
 
-  function bindDomEvents(activeItem) {
-    // Category tab clicks
+  function bindDomEvents(activeItem: CatalogItem): void {
     var tabButtons = container.querySelectorAll('[data-cat]');
     for (var i = 0; i < tabButtons.length; i++) {
-      tabButtons[i].onclick = function () {
-        activeCategory = this.getAttribute('data-cat');
-        selectedIndex = 0;
-        renderApp();
+      var tabBtn = tabButtons[i] as HTMLElement | undefined;
+      if (!tabBtn) continue;
+      tabBtn.onclick = function (this: GlobalEventHandlers): void {
+        var el = this as unknown as HTMLElement;
+        var catAttr = el.getAttribute('data-cat') as FilterCategory | null;
+        if (catAttr) {
+          activeCategory = catAttr;
+          selectedIndex = 0;
+          renderApp();
+        }
       };
     }
 
-    // Search input
-    var searchInput = document.getElementById('catalog-search');
+    var searchInput = document.getElementById('catalog-search') as HTMLInputElement | null;
     if (searchInput) {
-      searchInput.oninput = function () {
-        searchQuery = this.value;
+      searchInput.oninput = function (this: GlobalEventHandlers): void {
+        var inputEl = this as unknown as HTMLInputElement;
+        searchQuery = inputEl.value;
         selectedIndex = 0;
         applyFilters();
         var listEl = document.getElementById('channel-list');
@@ -343,11 +414,10 @@
 
     bindChannelCardClicks();
 
-    // Primary Play / Resume button
     var btnPlayPrimary = document.getElementById('btn-play-primary');
     if (btnPlayPrimary && activeItem && activeItem.id !== 'none') {
-      btnPlayPrimary.onclick = function () {
-        var resumeSec =
+      btnPlayPrimary.onclick = function (): void {
+        var resumeSec: number =
           activeItem.progress && activeItem.progress.positionSec > 5
             ? activeItem.progress.positionSec
             : 0;
@@ -355,53 +425,56 @@
       };
     }
 
-    // Restart button
     var btnPlayRestart = document.getElementById('btn-play-restart');
     if (btnPlayRestart && activeItem && activeItem.id !== 'none') {
-      btnPlayRestart.onclick = function () {
+      btnPlayRestart.onclick = function (): void {
         openPlayerForItem(activeItem, 0);
       };
     }
 
-    // Favorite toggle button
     var btnToggleFav = document.getElementById('btn-toggle-fav');
     if (btnToggleFav && activeItem && activeItem.id !== 'none') {
-      btnToggleFav.onclick = function () {
+      btnToggleFav.onclick = function (): void {
         toggleItemFavorite(activeItem);
       };
     }
 
-    // Open Add Source Modal
     var btnOpenSource = document.getElementById('btn-open-source-modal');
     var btnAddSourceHero = document.getElementById('btn-add-source-hero');
     var sourceModal = document.getElementById('source-modal');
     if (btnOpenSource && sourceModal) {
-      btnOpenSource.onclick = function () {
-        sourceModal.className = 'webtv-modal-backdrop open';
+      btnOpenSource.onclick = function (): void {
+        if (sourceModal) sourceModal.className = 'webtv-modal-backdrop open';
       };
     }
     if (btnAddSourceHero && sourceModal) {
-      btnAddSourceHero.onclick = function () {
-        sourceModal.className = 'webtv-modal-backdrop open';
+      btnAddSourceHero.onclick = function (): void {
+        if (sourceModal) sourceModal.className = 'webtv-modal-backdrop open';
       };
     }
 
     var btnCancelSource = document.getElementById('btn-cancel-source');
     if (btnCancelSource && sourceModal) {
-      btnCancelSource.onclick = function () {
-        sourceModal.className = 'webtv-modal-backdrop';
+      btnCancelSource.onclick = function (): void {
+        if (sourceModal) sourceModal.className = 'webtv-modal-backdrop';
       };
     }
 
     var btnSaveSource = document.getElementById('btn-save-source');
     if (btnSaveSource) {
-      btnSaveSource.onclick = function () {
-        var smbPath = document.getElementById('input-smb-path').value.trim();
-        var streamTitle = document.getElementById('input-stream-title').value.trim();
-        var streamUrl = document.getElementById('input-stream-url').value.trim();
+      btnSaveSource.onclick = function (): void {
+        var smbInput = document.getElementById('input-smb-path') as HTMLInputElement | null;
+        var titleInput = document.getElementById(
+          'input-stream-title'
+        ) as HTMLInputElement | null;
+        var urlInput = document.getElementById('input-stream-url') as HTMLInputElement | null;
+
+        var smbPath: string = smbInput ? smbInput.value.trim() : '';
+        var streamTitle: string = titleInput ? titleInput.value.trim() : '';
+        var streamUrl: string = urlInput ? urlInput.value.trim() : '';
 
         if (smbPath) {
-          postJson('/api/sources/smb', { path: smbPath }, function (status, resp) {
+          postJson('/api/sources/smb', { path: smbPath }, function (status, resp): void {
             if (status === 200 && resp && resp.items) {
               allItems = resp.items;
               activeCategory = 'smb';
@@ -412,7 +485,7 @@
           postJson(
             '/api/sources/stream',
             { title: streamTitle, streamUrl: streamUrl },
-            function (status, resp) {
+            function (status, resp): void {
               if (status === 200 && resp && resp.items) {
                 allItems = resp.items;
                 renderApp();
@@ -423,42 +496,41 @@
       };
     }
 
-    // Player OSD button events
     var btnClosePlayer = document.getElementById('btn-close-player');
     if (btnClosePlayer) {
       btnClosePlayer.onclick = closePlayer;
     }
     var btnPlayPause = document.getElementById('btn-osd-playpause');
     if (btnPlayPause) {
-      btnPlayPause.onclick = function () {
+      btnPlayPause.onclick = function (): void {
         if (playerInstance) playerInstance.togglePlayPause();
       };
     }
     var btnRw = document.getElementById('btn-osd-rw');
     if (btnRw) {
-      btnRw.onclick = function () {
+      btnRw.onclick = function (): void {
         if (playerInstance) playerInstance.seekRelative(-15);
       };
     }
     var btnFf = document.getElementById('btn-osd-ff');
     if (btnFf) {
-      btnFf.onclick = function () {
+      btnFf.onclick = function (): void {
         if (playerInstance) playerInstance.seekRelative(30);
       };
     }
     var btnCc = document.getElementById('btn-osd-cc');
     if (btnCc) {
-      btnCc.onclick = function () {
-        if (playerInstance) {
-          var on = playerInstance.toggleSubtitles();
+      btnCc.onclick = function (): void {
+        if (playerInstance && btnCc) {
+          var on: boolean = playerInstance.toggleSubtitles();
           btnCc.textContent = 'CC: ' + (on ? 'ON' : 'OFF');
         }
       };
     }
     var btnAspect = document.getElementById('btn-osd-aspect');
     if (btnAspect) {
-      btnAspect.onclick = function () {
-        if (playerInstance) {
+      btnAspect.onclick = function (): void {
+        if (playerInstance && btnAspect) {
           var mode = playerInstance.cycleAspectMode();
           btnAspect.textContent = 'Aspect: ' + mode;
         }
@@ -466,8 +538,8 @@
     }
     var btnRate = document.getElementById('btn-osd-rate');
     if (btnRate) {
-      btnRate.onclick = function () {
-        if (playerInstance) {
+      btnRate.onclick = function (): void {
+        if (playerInstance && btnRate) {
           var rate = playerInstance.cyclePlaybackRate();
           btnRate.textContent = 'Speed: ' + rate + 'x';
         }
@@ -475,35 +547,48 @@
     }
   }
 
-  function bindChannelCardClicks() {
+  function bindChannelCardClicks(): void {
     var cards = container.querySelectorAll('.webtv-channel-card');
     for (var j = 0; j < cards.length; j++) {
-      cards[j].onclick = function () {
-        var idx = Number(this.getAttribute('data-index'));
+      var card = cards[j] as HTMLElement | undefined;
+      if (!card) continue;
+      card.onclick = function (this: GlobalEventHandlers): void {
+        var el = this as unknown as HTMLElement;
+        var idx = Number(el.getAttribute('data-index'));
         selectChannel(idx);
       };
-      cards[j].ondblclick = function () {
-        var idx = Number(this.getAttribute('data-index'));
+      card.ondblclick = function (this: GlobalEventHandlers): void {
+        var el = this as unknown as HTMLElement;
+        var idx = Number(el.getAttribute('data-index'));
         selectChannel(idx);
         var item = filteredItems[selectedIndex];
-        if (item) openPlayerForItem(item, item.progress ? item.progress.positionSec : 0);
+        if (item) {
+          openPlayerForItem(item, item.progress ? item.progress.positionSec : 0);
+        }
       };
     }
   }
 
-  function toggleItemFavorite(item) {
-    postJson('/api/favorites', { itemId: item.id }, function (status, resp) {
-      if (status === 200 && resp) {
-        item.isFavorite = resp.isFavorite;
+  function toggleItemFavorite(item: CatalogItem): void {
+    postJson('/api/favorites', { itemId: item.id }, function (status, resp): void {
+      if (status === 200 && resp !== null) {
+        for (var i = 0; i < allItems.length; i++) {
+          var current = allItems[i];
+          if (current && current.id === item.id) {
+            allItems[i] = Object.assign({}, current, {
+              isFavorite: Boolean(resp.isFavorite)
+            });
+          }
+        }
         renderApp();
       }
     });
   }
 
-  function openPlayerForItem(item, startTimeSec) {
+  function openPlayerForItem(item: CatalogItem, startTimeSec: number): void {
     if (!PlayerEngine) return;
     var modal = document.getElementById('player-modal');
-    var videoEl = document.getElementById('webtv-video');
+    var videoEl = document.getElementById('webtv-video') as unknown as VideoElementLike | null;
     var osdTitle = document.getElementById('osd-title');
     var osdMeta = document.getElementById('osd-meta');
     var osdTime = document.getElementById('osd-time');
@@ -518,31 +603,33 @@
     if (osdTitle) osdTitle.textContent = item.title;
     if (osdMeta) osdMeta.textContent = item.subtitle || item.streamUrl;
 
-    playerInstance = PlayerEngine.createHybridPlayer({
+    var engine: PlayerEngineGlobal = PlayerEngine;
+
+    playerInstance = engine.createHybridPlayer({
       videoElement: videoEl,
-      onStateChange: function (st) {
+      onStateChange: function (st: HybridPlayerState): void {
         if (osdPlayPause) {
           osdPlayPause.textContent = st.status === 'playing' ? '⏸ Pause' : '▶ Play';
         }
       },
-      onTimeUpdate: function (curSec, durSec) {
+      onTimeUpdate: function (curSec: number, durSec: number): void {
         if (osdTime) {
           osdTime.textContent =
-            PlayerEngine.formatTime(curSec) + ' / ' + PlayerEngine.formatTime(durSec);
+            engine.formatTime(curSec) + ' / ' + engine.formatTime(durSec);
         }
         if (osdFill && durSec > 0) {
           osdFill.style.width = Math.min(100, Math.round((curSec / durSec) * 100)) + '%';
         }
-        var now = Date.now();
+        var now: number = Date.now();
         if (now - lastProgressSentAt > 4000 && curSec > 0) {
           lastProgressSentAt = now;
           saveWatchProgress(item.id, curSec, durSec);
         }
       },
-      onSubtitleText: function (text) {
+      onSubtitleText: function (text: string): void {
         if (subtitleBox) subtitleBox.textContent = text;
       },
-      onError: function (errMsg) {
+      onError: function (errMsg: string): void {
         sendTelemetryLog('Player Error', { item: item.id, error: errMsg });
       }
     });
@@ -556,15 +643,23 @@
     });
   }
 
-  function saveWatchProgress(itemId, positionSec, durationSec) {
+  function saveWatchProgress(
+    itemId: string,
+    positionSec: number,
+    durationSec: number
+  ): void {
     postJson(
       '/api/progress',
       { itemId: itemId, positionSec: positionSec, durationSec: durationSec },
-      function (status, resp) {
+      function (status, resp): void {
         if (status === 200 && resp) {
           for (var i = 0; i < allItems.length; i++) {
-            if (allItems[i].id === itemId) {
-              allItems[i].progress = resp.progress && !resp.progress.completed ? resp.progress : null;
+            var existing = allItems[i];
+            if (existing && existing.id === itemId) {
+              allItems[i] = Object.assign({}, existing, {
+                progress:
+                  resp.progress && !resp.progress.completed ? resp.progress : null
+              });
             }
           }
         }
@@ -572,7 +667,7 @@
     );
   }
 
-  function closePlayer() {
+  function closePlayer(): void {
     if (!isPlayerOpen) return;
     if (playerInstance && playerInstance.state.item) {
       saveWatchProgress(
@@ -588,43 +683,47 @@
     renderApp();
   }
 
-  function selectChannel(index) {
+  function selectChannel(index: number): void {
     if (!filteredItems.length) return;
-    if (index < 0) index = filteredItems.length - 1;
-    if (index >= filteredItems.length) index = 0;
-    selectedIndex = index;
+    var targetIndex = index;
+    if (targetIndex < 0) targetIndex = filteredItems.length - 1;
+    if (targetIndex >= filteredItems.length) targetIndex = 0;
+    selectedIndex = targetIndex;
     renderApp();
-    sendTelemetryLog('Media item focused', {
-      id: filteredItems[selectedIndex].id,
-      title: filteredItems[selectedIndex].title
-    });
+    var selectedItem = filteredItems[selectedIndex];
+    if (selectedItem) {
+      sendTelemetryLog('Media item focused', {
+        id: selectedItem.id,
+        title: selectedItem.title
+      });
+    }
   }
 
-  // Global TV Remote & Keyboard Controls
-  document.addEventListener('keydown', function (e) {
-    var activeTag = document.activeElement ? document.activeElement.tagName : '';
+  document.addEventListener('keydown', function (e: KeyboardEvent): void {
+    var activeTag: string = document.activeElement ? document.activeElement.tagName : '';
     if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') {
       if (e.keyCode === 27 || e.keyCode === 10009) {
-        document.activeElement.blur();
+        (document.activeElement as HTMLElement).blur();
       }
       return;
     }
 
     if (isPlayerOpen && playerInstance) {
-      if (e.keyCode === 13 || e.keyCode === 415 || e.keyCode === 19 || e.keyCode === 10252) {
-        // Enter or MediaPlayPause
+      if (
+        e.keyCode === 13 ||
+        e.keyCode === 415 ||
+        e.keyCode === 19 ||
+        e.keyCode === 10252
+      ) {
         playerInstance.togglePlayPause();
         e.preventDefault();
       } else if (e.keyCode === 37 || e.keyCode === 412) {
-        // Left or MediaRewind
         playerInstance.seekRelative(-15);
         e.preventDefault();
       } else if (e.keyCode === 39 || e.keyCode === 417) {
-        // Right or MediaFastForward
         playerInstance.seekRelative(30);
         e.preventDefault();
       } else if (e.keyCode === 10009 || e.keyCode === 27 || e.keyCode === 413) {
-        // Return / Escape / Stop
         closePlayer();
         e.preventDefault();
       }
@@ -633,22 +732,18 @@
 
     if (!filteredItems.length) return;
     if (e.keyCode === 38) {
-      // Up arrow
       selectChannel(selectedIndex - 1);
       e.preventDefault();
     } else if (e.keyCode === 40) {
-      // Down arrow
       selectChannel(selectedIndex + 1);
       e.preventDefault();
     } else if (e.keyCode === 13) {
-      // Enter -> Play active item
       var item = filteredItems[selectedIndex];
       if (item) {
         openPlayerForItem(item, item.progress ? item.progress.positionSec : 0);
         e.preventDefault();
       }
     } else if (e.keyCode === 403 || e.keyCode === 70) {
-      // Red Color Button (403) or 'F' key -> Toggle Favorite
       var favItem = filteredItems[selectedIndex];
       if (favItem) {
         toggleItemFavorite(favItem);
@@ -657,18 +752,20 @@
     }
   });
 
-  function checkAndTriggerDeepLink() {
+  function checkAndTriggerDeepLink(): void {
     if (!PlayerEngine) return;
     var deepLink = PlayerEngine.extractDeepLinkFromEnvironment();
     if (!deepLink || !deepLink.itemId) return;
     for (var i = 0; i < allItems.length; i++) {
+      var candidate = allItems[i];
+      if (!candidate) continue;
       if (
-        allItems[i].id === deepLink.itemId ||
-        allItems[i].action_data === deepLink.command + '/' + deepLink.itemId
+        candidate.id === deepLink.itemId ||
+        candidate.action_data === deepLink.command + '/' + deepLink.itemId
       ) {
         selectedIndex = i;
         renderApp();
-        openPlayerForItem(allItems[i], deepLink.resumeSec || 0);
+        openPlayerForItem(candidate, deepLink.resumeSec || 0);
         return;
       }
     }
@@ -676,21 +773,24 @@
 
   window.addEventListener('appcontrol', checkAndTriggerDeepLink);
 
-  // Load full catalog from /api/catalog
   var xhr = new XMLHttpRequest();
-  xhr.onreadystatechange = function () {
+  xhr.onreadystatechange = function (): void {
     if (xhr.readyState === 4 && xhr.status === 200) {
       try {
-        var data = JSON.parse(xhr.responseText);
+        var data = JSON.parse(xhr.responseText) as { items?: CatalogItem[] };
         if (data && Array.isArray(data.items)) {
           allItems = data.items;
         }
-      } catch (e) {}
+      } catch (_e: unknown) {}
       renderApp();
       checkAndTriggerDeepLink();
-      sendTelemetryLog('Open WebTV Media Center initialized', { totalItems: allItems.length });
+      sendTelemetryLog('Open WebTV Media Center initialized', {
+        totalItems: allItems.length
+      });
     }
   };
   xhr.open('GET', '/api/catalog', true);
   xhr.send();
-})();
+}
+
+initMediaCenterApp();

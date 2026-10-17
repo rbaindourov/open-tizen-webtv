@@ -1,9 +1,9 @@
 /**
- * Open WebTV - Unified Remote Logger, Media Server (SMB/Local/M3U) & Smart Hub Preview Host
+ * Open WebTV - Strictly Typed Unified Remote Logger, Media Server (SMB/Local/M3U) & Smart Hub Preview Host
  *
  * Provides:
  * - `GET /log` & `POST /log`: Real-time Tizen background service & UI telemetry logger (`GET /logs`).
- * - `GET /manifest.json`: Dynamic asset manifest for `src/manifest-loader.js`.
+ * - `GET /manifest.json`: Dynamic asset manifest for `src/manifest-loader.ts`.
  * - `GET /preview.json`: Dynamic Samsung Smart Hub Preview (`bg_service`) feed with
  *   "Continue Watching", "SMB & Media Server Library", and "Featured Open Streams".
  * - `GET /api/catalog`: Full movie & channel catalog with metadata, codecs, subtitles, and resume state.
@@ -14,28 +14,48 @@
  * - `POST /api/favorites`: Toggle favorite status for any movie/channel.
  * - `GET /stream/:id`: RFC 7233 HTTP `206 Partial Content` byte-range video streamer for `.mp4`/`.mkv`.
  * - `GET /subtitles/:id.vtt`: On-the-fly `.srt` to `.vtt` WebVTT subtitle streamer.
+ * - `GET /assets/background.svg`, `/assets/posters/*.svg`, `/assets/backgrounds/*.svg`: Unique vector assets.
  */
-'use strict';
 
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const {
+import fs from 'node:fs';
+import http from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  renderAmbientBackgroundSvg,
+  renderBackdropSvg,
+  renderPosterSvg
+} from './assets.ts';
+import {
   convertSrtToVtt,
   createMediaCatalogManager
-} = require('./media-catalog');
+} from './media-catalog.ts';
+import { transpileFileForTizenBrowser } from '../scripts/transpile-tizen.ts';
+import type {
+  CatalogItem,
+  CustomStreamInput,
+  DevServerOptions,
+  MediaCatalogManager,
+  TelemetryLogEntry,
+  TelemetryLogInput
+} from './types.ts';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const MAX_LOG_ENTRIES = 200;
 
-const MIME_TYPES = {
+const MIME_TYPES: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.xml': 'application/xml; charset=utf-8',
   '.vtt': 'text/vtt; charset=utf-8',
-  '.svg': 'image/svg+xml',
+  '.svg': 'image/svg+xml; charset=utf-8',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
   '.ico': 'image/x-icon'
 };
 
@@ -51,18 +71,25 @@ Use Left/Right or Rewind/FastForward keys to seek, and CC to toggle subtitles.
 Streaming with hardware AVPlay & HTML5 Byte-Range (HTTP 206) support.
 `;
 
-function createDevServer(options) {
-  const opts = options || {};
+export interface DevServerInstance {
+  readonly server: http.Server;
+  readonly logBuffer: TelemetryLogEntry[];
+  recordLog(entry: TelemetryLogInput): TelemetryLogEntry;
+  readonly catalogManager: MediaCatalogManager;
+}
+
+export function createDevServer(options?: DevServerOptions): DevServerInstance {
+  const opts: DevServerOptions = options ?? {};
   const silent = Boolean(opts.silent);
-  const logBuffer = [];
+  const logBuffer: TelemetryLogEntry[] = [];
 
   const catalogManager = createMediaCatalogManager({
-    initialMediaDir: opts.mediaDir || process.env.MEDIA_DIR || null,
-    initialMediaLabel: opts.mediaLabel || process.env.MEDIA_LABEL || 'Mounted SMB Share'
+    initialMediaDir: opts.mediaDir ?? process.env.MEDIA_DIR ?? null,
+    initialMediaLabel: opts.mediaLabel ?? process.env.MEDIA_LABEL ?? 'Mounted SMB Share'
   });
 
-  function recordLog(entry) {
-    const record = {
+  function recordLog(entry: TelemetryLogInput): TelemetryLogEntry {
+    const record: TelemetryLogEntry = {
       id: logBuffer.length + 1,
       timestamp: new Date().toISOString(),
       level: entry.level || 'info',
@@ -77,7 +104,10 @@ function createDevServer(options) {
     if (!silent) {
       const dataPreview =
         record.data !== null
-          ? ' | data=' + (typeof record.data === 'string' ? record.data : JSON.stringify(record.data))
+          ? ' | data=' +
+            (typeof record.data === 'string'
+              ? record.data
+              : JSON.stringify(record.data))
           : '';
       console.log(
         `[${record.timestamp}] [${record.level.toUpperCase()}] (${record.source}) ${record.message}${dataPreview}`
@@ -86,7 +116,7 @@ function createDevServer(options) {
     return record;
   }
 
-  function sendJson(res, statusCode, payload) {
+  function sendJson(res: http.ServerResponse, statusCode: number, payload: unknown): void {
     const body = JSON.stringify(payload, null, 2);
     res.writeHead(statusCode, {
       'Content-Type': 'application/json; charset=utf-8',
@@ -97,17 +127,20 @@ function createDevServer(options) {
     res.end(body);
   }
 
-  function readJsonBody(req) {
-    return new Promise((resolve, reject) => {
+  function readJsonBody<T = Record<string, unknown>>(req: http.IncomingMessage): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
       let body = '';
-      req.on('data', (chunk) => {
-        body += chunk;
+      req.on('data', (chunk: Buffer | string) => {
+        body += String(chunk);
       });
       req.on('end', () => {
-        if (!body) return resolve({});
+        if (!body) {
+          resolve({} as T);
+          return;
+        }
         try {
-          resolve(JSON.parse(body));
-        } catch (err) {
+          resolve(JSON.parse(body) as T);
+        } catch (_err: unknown) {
           reject(new Error('Invalid JSON request body'));
         }
       });
@@ -115,14 +148,14 @@ function createDevServer(options) {
     });
   }
 
-  function serveStaticFile(res, filePath) {
+  function serveStaticFile(res: http.ServerResponse, filePath: string): void {
     fs.readFile(filePath, (err, content) => {
       if (err) {
         sendJson(res, 404, { error: 'Not Found', path: path.basename(filePath) });
         return;
       }
       const ext = path.extname(filePath).toLowerCase();
-      const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+      const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
       res.writeHead(200, {
         'Content-Type': contentType,
         'Access-Control-Allow-Origin': '*'
@@ -131,10 +164,28 @@ function createDevServer(options) {
     });
   }
 
+  function serveTranspiledTsAsJs(res: http.ServerResponse, tsFilePath: string): void {
+    try {
+      const jsContent = transpileFileForTizenBrowser(tsFilePath);
+      res.writeHead(200, {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.end(jsContent);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      sendJson(res, 500, { error: 'TypeScript transpilation failed', message });
+    }
+  }
+
   /**
    * Streams a local/SMB video file with RFC 7233 HTTP 206 Partial Content byte-range support.
    */
-  function streamVideoFile(req, res, item) {
+  function streamVideoFile(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    item: CatalogItem | null
+  ): void {
     if (!item || !item.filePath || !fs.existsSync(item.filePath)) {
       sendJson(res, 404, { error: 'Video file not found on disk' });
       return;
@@ -156,8 +207,10 @@ function createDevServer(options) {
         return;
       }
 
-      const start = match[1] ? parseInt(match[1], 10) : 0;
-      const end = match[2] ? Math.min(parseInt(match[2], 10), fileSize - 1) : fileSize - 1;
+      const startStr = match[1] ?? '';
+      const endStr = match[2] ?? '';
+      const start = startStr ? parseInt(startStr, 10) : 0;
+      const end = endStr ? Math.min(parseInt(endStr, 10), fileSize - 1) : fileSize - 1;
 
       if (start >= fileSize || start > end) {
         res.writeHead(416, {
@@ -194,47 +247,6 @@ function createDevServer(options) {
     stream.pipe(res);
   }
 
-  function renderPosterSvg(slug, customItem) {
-    const paletteMap = {
-      'big-buck-bunny': ['#0284c7', '#38bdf8', 'Big Buck Bunny', '1080p • H.264'],
-      sintel: ['#7c3aed', '#c084fc', 'Sintel', '1080p • H.264'],
-      'tears-of-steel': ['#0f766e', '#2dd4bf', 'Tears of Steel', '1080p • Sci-Fi'],
-      'cosmos-laundromat': ['#1d4ed8', '#60a5fa', 'Elephants Dream', '1080p • Open Movie'],
-      spring: ['#15803d', '#4ade80', 'Spring', '1080p • Open Movie'],
-      charge: ['#b91c1c', '#f87171', 'Charge', '1080p • Action']
-    };
-    const key = String(slug || '').replace(/\.svg$/i, '');
-    let theme = paletteMap[key];
-    if (!theme && customItem) {
-      theme = [
-        '#1e293b',
-        '#38bdf8',
-        customItem.title,
-        `${customItem.resolution || 'HD'} • ${customItem.videoCodec || 'STREAM'}`
-      ];
-    } else if (!theme) {
-      theme = ['#334155', '#94a3b8', 'SMB / Media Stream', 'Open WebTV • Direct Play'];
-    }
-
-    const safeTitle = String(theme[2]).replace(/[<>&"']/g, '');
-    const safeSub = String(theme[3]).replace(/[<>&"']/g, '');
-
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" width="640" height="360">
-      <defs>
-        <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="${theme[0]}" />
-          <stop offset="100%" stop-color="#0f172a" />
-        </linearGradient>
-      </defs>
-      <rect width="640" height="360" fill="url(#g)" rx="16" />
-      <circle cx="540" cy="80" r="110" fill="${theme[1]}" fill-opacity="0.14" />
-      <rect x="40" y="40" width="128" height="34" rx="8" fill="${theme[1]}" fill-opacity="0.25" />
-      <text x="104" y="63" fill="#f8fafc" font-family="sans-serif" font-size="14" font-weight="bold" text-anchor="middle">${safeSub}</text>
-      <text x="40" y="265" fill="#ffffff" font-family="sans-serif" font-size="34" font-weight="bold">${safeTitle}</text>
-      <text x="40" y="305" fill="#cbd5e1" font-family="sans-serif" font-size="18">Open WebTV • Direct Stream Ready</text>
-    </svg>`;
-  }
-
   const server = http.createServer(async (req, res) => {
     const hostHeader = req.headers.host || '127.0.0.1:4000';
     const baseOrigin = `http://${hostHeader}`;
@@ -267,37 +279,41 @@ function createDevServer(options) {
     if (pathname === '/log') {
       if (req.method === 'POST') {
         try {
-          const payload = await readJsonBody(req);
+          const payload = await readJsonBody<TelemetryLogInput>(req);
           const entry = recordLog({
-            level: payload.level || query.level || 'info',
-            source: payload.source || query.source || 'tizen-service',
-            message: payload.message || query.message || 'Log event',
-            data: payload.data !== undefined ? payload.data : query.data
+            level: payload.level || 'info',
+            source: payload.source || 'tizen-service',
+            message: payload.message || '',
+            data: payload.data
           });
           sendJson(res, 200, { ok: true, entry });
-        } catch (err) {
-          sendJson(res, 400, { error: err.message });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          sendJson(res, 400, { ok: false, error: msg });
         }
         return;
       }
 
-      let parsedData = query.data;
-      if (typeof parsedData === 'string') {
+      let parsedData: unknown = query.data !== undefined ? query.data : null;
+      if (typeof parsedData === 'string' && parsedData.length > 0) {
         try {
           parsedData = JSON.parse(parsedData);
-        } catch (e) {}
+        } catch (_e: unknown) {
+          // keep as raw string
+        }
       }
+
       const entry = recordLog({
         level: query.level || 'info',
         source: query.source || 'tizen-service',
-        message: query.message || JSON.stringify(query),
+        message: query.message || '',
         data: parsedData
       });
       sendJson(res, 200, { ok: true, entry });
       return;
     }
 
-    // 3. Inspect or Clear Logs (/logs)
+    // 3. Log Inspection & Reset (/logs)
     if (pathname === '/logs') {
       if (req.method === 'DELETE') {
         logBuffer.length = 0;
@@ -338,8 +354,8 @@ function createDevServer(options) {
 
     if (pathname === '/api/sources/smb' && req.method === 'POST') {
       try {
-        const body = await readJsonBody(req);
-        const dirEntry = catalogManager.addMediaDirectory(body.path, body.label);
+        const body = await readJsonBody<{ path?: string; label?: string }>(req);
+        const dirEntry = catalogManager.addMediaDirectory(body.path || '', body.label);
         const items = catalogManager.getAllItems(baseOrigin);
         recordLog({
           source: 'media-catalog',
@@ -347,16 +363,17 @@ function createDevServer(options) {
           data: { label: dirEntry.label, totalItems: items.length }
         });
         sendJson(res, 200, { ok: true, source: dirEntry, items });
-      } catch (err) {
-        sendJson(res, 400, { ok: false, error: err.message });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        sendJson(res, 400, { ok: false, error: msg });
       }
       return;
     }
 
     if (pathname === '/api/sources/m3u' && req.method === 'POST') {
       try {
-        const body = await readJsonBody(req);
-        const imported = catalogManager.addM3uContent(body.content, body.label);
+        const body = await readJsonBody<{ content?: string; label?: string }>(req);
+        const imported = catalogManager.addM3uContent(body.content || '', body.label);
         recordLog({
           source: 'media-catalog',
           message: `Imported M3U playlist (${imported.length} streams)`,
@@ -367,15 +384,16 @@ function createDevServer(options) {
           importedCount: imported.length,
           items: catalogManager.getAllItems(baseOrigin)
         });
-      } catch (err) {
-        sendJson(res, 400, { ok: false, error: err.message });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        sendJson(res, 400, { ok: false, error: msg });
       }
       return;
     }
 
     if (pathname === '/api/sources/stream' && req.method === 'POST') {
       try {
-        const body = await readJsonBody(req);
+        const body = await readJsonBody<CustomStreamInput>(req);
         const added = catalogManager.addCustomStream(body);
         recordLog({
           source: 'media-catalog',
@@ -387,34 +405,41 @@ function createDevServer(options) {
           item: added,
           items: catalogManager.getAllItems(baseOrigin)
         });
-      } catch (err) {
-        sendJson(res, 400, { ok: false, error: err.message });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        sendJson(res, 400, { ok: false, error: msg });
       }
       return;
     }
 
     if (pathname === '/api/progress' && req.method === 'POST') {
       try {
-        const body = await readJsonBody(req);
+        const body = await readJsonBody<{
+          itemId?: string;
+          positionSec?: number;
+          durationSec?: number;
+        }>(req);
         const progress = catalogManager.updateWatchProgress(
-          body.itemId,
-          body.positionSec,
-          body.durationSec
+          body.itemId || '',
+          body.positionSec ?? 0,
+          body.durationSec ?? 0
         );
         sendJson(res, 200, { ok: true, progress });
-      } catch (err) {
-        sendJson(res, 400, { ok: false, error: err.message });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        sendJson(res, 400, { ok: false, error: msg });
       }
       return;
     }
 
     if (pathname === '/api/favorites' && req.method === 'POST') {
       try {
-        const body = await readJsonBody(req);
-        const isFavorite = catalogManager.toggleFavorite(body.itemId);
+        const body = await readJsonBody<{ itemId?: string }>(req);
+        const isFavorite = catalogManager.toggleFavorite(body.itemId || '');
         sendJson(res, 200, { ok: true, itemId: body.itemId, isFavorite });
-      } catch (err) {
-        sendJson(res, 400, { ok: false, error: err.message });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        sendJson(res, 400, { ok: false, error: msg });
       }
       return;
     }
@@ -446,7 +471,8 @@ function createDevServer(options) {
       }
 
       const rawSub = fs.readFileSync(item.subtitlePath, 'utf8');
-      const vttContent = item.subtitleFormat === 'srt' ? convertSrtToVtt(rawSub) : rawSub;
+      const vttContent =
+        item.subtitleFormat === 'srt' ? convertSrtToVtt(rawSub) : rawSub;
       res.writeHead(200, {
         'Content-Type': 'text/vtt; charset=utf-8',
         'Access-Control-Allow-Origin': '*'
@@ -455,11 +481,39 @@ function createDevServer(options) {
       return;
     }
 
-    // 9. Dynamic SVG Posters (/assets/posters/*.svg)
+    // 9. Local Sidecar Artwork Streamer (/artwork/:id/poster, /artwork/:id/backdrop)
+    if (pathname.startsWith('/artwork/')) {
+      const parts = pathname.replace(/^\/artwork\//, '').split('/');
+      const itemId = parts[0] || '';
+      const kind = parts[1] || 'poster';
+      const item = catalogManager.getItemById(itemId, baseOrigin);
+      const artPath =
+        kind === 'backdrop' ? item?.backdropFilePath : item?.posterFilePath;
+      if (artPath && fs.existsSync(artPath)) {
+        serveStaticFile(res, artPath);
+        return;
+      }
+      sendJson(res, 404, { error: 'Sidecar artwork not found' });
+      return;
+    }
+
+    // 10. Bespoke Ambient Cinema Background SVG (/assets/background.svg)
+    if (pathname === '/assets/background.svg') {
+      res.writeHead(200, {
+        'Content-Type': 'image/svg+xml; charset=utf-8',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.end(renderAmbientBackgroundSvg());
+      return;
+    }
+
+    // 11. Unique Dynamic SVG Posters (/assets/posters/*.svg)
     if (pathname.startsWith('/assets/posters/') && pathname.endsWith('.svg')) {
       const slug = path.basename(pathname, '.svg');
       const customId = slug.startsWith('media-') ? slug.replace(/^media-/, '') : null;
-      const customItem = customId ? catalogManager.getItemById(customId, baseOrigin) : null;
+      const customItem = customId
+        ? catalogManager.getItemById(customId, baseOrigin)
+        : null;
       const svg = renderPosterSvg(slug, customItem);
       res.writeHead(200, {
         'Content-Type': 'image/svg+xml; charset=utf-8',
@@ -469,30 +523,62 @@ function createDevServer(options) {
       return;
     }
 
-    // 10. Reference 10-foot WebTV UI Bundles (/assets/*)
+    // 12. Unique Dynamic SVG Widescreen Stage Backdrops (/assets/backgrounds/*.svg)
+    if (pathname.startsWith('/assets/backgrounds/') && pathname.endsWith('.svg')) {
+      const slug = path.basename(pathname, '.svg');
+      const customId = slug.startsWith('media-') ? slug.replace(/^media-/, '') : null;
+      const customItem = customId
+        ? catalogManager.getItemById(customId, baseOrigin)
+        : null;
+      const svg = renderBackdropSvg(slug, customItem);
+      res.writeHead(200, {
+        'Content-Type': 'image/svg+xml; charset=utf-8',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.end(svg);
+      return;
+    }
+
+    // 13. Reference 10-foot WebTV UI Bundles (/assets/*)
     if (pathname.startsWith('/assets/')) {
       const relAsset = pathname.replace(/^\/assets\//, '');
-      const safeAssetPath = path.resolve(__dirname, 'public', relAsset);
-      if (safeAssetPath.startsWith(path.resolve(__dirname, 'public'))) {
-        serveStaticFile(res, safeAssetPath);
-        return;
+      const publicDir = path.resolve(__dirname, 'public');
+      const safeAssetPath = path.resolve(publicDir, relAsset);
+      if (safeAssetPath.startsWith(publicDir)) {
+        if (safeAssetPath.endsWith('.js')) {
+          const tsCandidate = safeAssetPath.replace(/\.js$/, '.ts');
+          if (fs.existsSync(tsCandidate)) {
+            serveTranspiledTsAsJs(res, tsCandidate);
+            return;
+          }
+        }
+        if (fs.existsSync(safeAssetPath) && fs.statSync(safeAssetPath).isFile()) {
+          serveStaticFile(res, safeAssetPath);
+          return;
+        }
       }
     }
 
-    // 11. Serve Tizen Wrapper App directly (/ or /index.html)
+    // 14. Serve Tizen Wrapper App directly (/ or /index.html or /app-ipc-bridge.js or /manifest-loader.js)
     if (pathname === '/' || pathname === '/index.html') {
       serveStaticFile(res, path.resolve(__dirname, '../src/index.html'));
       return;
     }
 
-    const srcCandidate = path.resolve(__dirname, '../src', pathname.replace(/^\/+/, ''));
-    if (
-      srcCandidate.startsWith(path.resolve(__dirname, '../src')) &&
-      fs.existsSync(srcCandidate) &&
-      fs.statSync(srcCandidate).isFile()
-    ) {
-      serveStaticFile(res, srcCandidate);
-      return;
+    const srcDir = path.resolve(__dirname, '../src');
+    const srcCandidate = path.resolve(srcDir, pathname.replace(/^\/+/, ''));
+    if (srcCandidate.startsWith(srcDir)) {
+      if (srcCandidate.endsWith('.js')) {
+        const tsSrcCandidate = srcCandidate.replace(/\.js$/, '.ts');
+        if (fs.existsSync(tsSrcCandidate)) {
+          serveTranspiledTsAsJs(res, tsSrcCandidate);
+          return;
+        }
+      }
+      if (fs.existsSync(srcCandidate) && fs.statSync(srcCandidate).isFile()) {
+        serveStaticFile(res, srcCandidate);
+        return;
+      }
     }
 
     sendJson(res, 404, { error: 'Route not found', pathname });
@@ -506,7 +592,12 @@ function createDevServer(options) {
   };
 }
 
-if (require.main === module) {
+const isMainModule =
+  process.argv[1] !== undefined &&
+  fs.existsSync(process.argv[1]) &&
+  fs.realpathSync(process.argv[1]) === fs.realpathSync(__filename);
+
+if (isMainModule) {
   const port = Number(process.env.PORT || 4000);
   const { server, catalogManager } = createDevServer();
   server.listen(port, () => {
@@ -518,14 +609,14 @@ if (require.main === module) {
     console.log(`- Smart Hub Preview Feed:  http://127.0.0.1:${port}/preview.json`);
     console.log(`- Remote Logger Sink:      http://127.0.0.1:${port}/log?message=hello`);
     if (catalogManager.mediaDirs.length > 0) {
-      console.log(`- Mounted SMB/Media Dirs:  ${catalogManager.mediaDirs.map((d) => d.path).join(', ')}`);
+      console.log(
+        `- Mounted SMB/Media Dirs:  ${catalogManager.mediaDirs.map((d) => d.path).join(', ')}`
+      );
     } else {
-      console.log(`- Tip: Set MEDIA_DIR=/path/to/movies or add an SMB folder from the TV UI!`);
+      console.log(
+        `- Tip: Set MEDIA_DIR=/path/to/movies or add an SMB folder from the TV UI!`
+      );
     }
     console.log('==============================================================');
   });
 }
-
-module.exports = {
-  createDevServer
-};

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <title>Open WebTV</title>
+    <link rel="icon" href="logo.png" type="image/png">
     <style>
       * {
         box-sizing: border-box;
@@ -14,7 +15,10 @@
       html, body {
         width: 100%;
         height: 100%;
-        background-color: #0b0f19;
+        background-color: #050811;
+        background-image: url('background.png');
+        background-size: cover;
+        background-position: center;
         color: #f8fafc;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         overflow: hidden;
@@ -35,7 +39,9 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        background: radial-gradient(circle at center, #1e293b 0%, #0b0f19 75%);
+        background:
+          linear-gradient(180deg, rgba(5, 8, 17, 0.55) 0%, rgba(7, 11, 22, 0.88) 100%),
+          url('background.png') center / cover no-repeat;
         z-index: 100;
         transition: opacity 0.35s ease;
       }
@@ -44,19 +50,19 @@
         pointer-events: none;
       }
       .boot-logo {
-        width: 88px;
-        height: 88px;
-        border-radius: 20px;
-        background: linear-gradient(135deg, #38bdf8, #6366f1);
+        width: 96px;
+        height: 96px;
+        border-radius: 22px;
+        background: url('logo.png') center / cover no-repeat, linear-gradient(135deg, #38bdf8, #6366f1);
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 36px;
+        font-size: 32px;
         font-weight: 800;
         letter-spacing: -1px;
-        color: #ffffff;
+        color: transparent;
         margin-bottom: 28px;
-        box-shadow: 0 16px 40px rgba(56, 189, 248, 0.25);
+        box-shadow: 0 18px 44px rgba(14, 165, 233, 0.32);
       }
       .boot-title {
         font-size: 32px;

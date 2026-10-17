@@ -2,10 +2,13 @@
 <tproject xmlns="http://www.tizen.org/tproject">
     <platforms>
         <platform>
-            <name>tv-samsung-5.5</name>
+            <name>tv-samsung-6.0</name>
         </platform>
     </platforms>
     <package>
-        <blacklist/>
+        <blacklist>
+            <file name="*.ts" />
+            <folder name="types" />
+        </blacklist>
     </package>
 </tproject>

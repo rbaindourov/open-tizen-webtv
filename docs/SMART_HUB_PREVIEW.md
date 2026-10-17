@@ -35,25 +35,29 @@ In [`src/config.xml`](../src/config.xml):
 
 ## 2. Handling Deep-Link Launches in Your Web App
 
-When a user clicks a tile in the Smart Hub Preview bar (for example, `"action_data": "watch/open-big-buck-bunny"`), Samsung Tizen fires an `appcontrol` event on `window`. [`OpenWebTVPlayer.extractDeepLinkFromEnvironment()`](../dev-server/public/player.js) handles this automatically:
+When a user clicks a tile in the Smart Hub Preview bar (for example, `"action_data": "watch/open-big-buck-bunny"`), Samsung Tizen fires an `appcontrol` event on `window`. [`extractDeepLinkFromEnvironment()`](../dev-server/public/player.ts) handles this automatically with strict TypeScript types:
 
-```javascript
-function checkDeepLinkPayload() {
-  if (typeof tizen === 'undefined' || !tizen.application) {
+```typescript
+import type { TizenNamespace } from '../../src/types/tizen.ts';
+import type { DeepLinkTarget } from './player.ts';
+import { parseActionData } from './player.ts';
+
+export function checkDeepLinkPayload(tz: TizenNamespace | null): DeepLinkTarget | null {
+  if (!tz || !tz.application) {
     return null;
   }
-  var reqAppControl = tizen.application.getCurrentApplication().getRequestedAppControl();
+  const reqAppControl = tz.application.getCurrentApplication().getRequestedAppControl();
   if (!reqAppControl || !reqAppControl.appControl || !reqAppControl.appControl.data) {
     return null;
   }
-  var data = reqAppControl.appControl.data;
-  for (var i = 0; i < data.length; i++) {
-    if (data[i].key === 'PAYLOAD' && data[i].value && data[i].value.length > 0) {
+  for (const entry of reqAppControl.appControl.data) {
+    if (entry.key === 'PAYLOAD' && entry.value.length > 0) {
+      const rawVal = entry.value[0] ?? '';
       try {
-        var parsed = JSON.parse(data[i].value[0]);
-        return parsed.values; // e.g. "watch/open-big-buck-bunny"
-      } catch (e) {
-        return data[i].value[0];
+        const parsed = JSON.parse(rawVal) as { values?: string };
+        return parsed.values ? parseActionData(parsed.values) : null;
+      } catch {
+        return parseActionData(rawVal);
       }
     }
   }

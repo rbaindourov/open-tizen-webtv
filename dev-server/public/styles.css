@@ -4,7 +4,7 @@
   grid-template-columns: 340px 1fr;
   width: 100vw;
   height: 100vh;
-  background: #0b0f19;
+  background: #050811 url('/assets/background.svg') center / cover no-repeat;
   color: #f8fafc;
   overflow: hidden;
 }

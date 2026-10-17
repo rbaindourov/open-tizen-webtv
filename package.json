@@ -1,17 +1,21 @@
 {
   "name": "open-tizen-webtv",
   "version": "1.0.0",
-  "description": "Unbranded, open-source Samsung Tizen Smart TV Web Wrapper, Dynamic Manifest Loader, Smart Hub Preview Background Service, and SMB/LAN Media Server.",
-  "main": "dev-server/index.js",
+  "type": "module",
+  "description": "Unbranded, strictly-typed TypeScript Samsung Tizen Smart TV Web Wrapper, Dynamic Manifest Loader, Smart Hub Preview Background Service, and SMB/LAN Media Server.",
+  "main": "dev-server/index.ts",
   "scripts": {
-    "start": "node dev-server/index.js",
-    "dev": "node dev-server/index.js",
-    "test": "node --test test/*.test.js",
-    "validate:config": "node scripts/validate-config.js",
-    "build:wgt": "node scripts/build-wgt.js"
+    "start": "node --no-warnings dev-server/index.ts",
+    "dev": "node --no-warnings dev-server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit && node --no-warnings --test test/*.test.ts",
+    "validate:config": "node --no-warnings scripts/validate-config.ts",
+    "build:wgt": "node --no-warnings scripts/build-wgt.ts",
+    "build": "tsc --noEmit && node --no-warnings scripts/build-wgt.ts"
   },
   "keywords": [
     "tizen",
+    "typescript",
     "samsung-tv",
     "smart-tv",
     "webtv",
@@ -24,6 +28,10 @@
   "author": "Robert Baindourov",
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
   }
 }

@@ -1,54 +1,70 @@
 /**
- * Open WebTV - Multi-Source Media Catalog, SMB/Directory Scanner & Subtitle Engine
+ * Open WebTV - Strictly Typed SMB / Local Media Scanner, Metadata Parser, M3U & Subtitle Engine
  *
- * Capabilities:
- * - Scans local or mounted SMB/NAS directories (`MEDIA_DIR`) recursively for video files
- *   (.mp4, .mkv, .webm, .m4v, .mov, .avi, .ts, .m3u8).
- * - Parses scene/release filenames into clean titles, release years, resolution badges
- *   (4K UHD, 1080p, 720p), video/audio codec tags (HEVC, H.264, HDR, AAC, AC3), and SxxExx tags.
- * - Automatically discovers sidecar subtitles (`.srt`, `.vtt`), poster images, and `.nfo` XML files.
- * - Converts `.srt` subtitles to WebVTT (`.vtt`) on the fly for HTML5 `<track>` compatibility.
- * - Parses `.m3u` / `.m3u8` playlists (`#EXTINF`) into playable catalog items.
- * - Manages persistent watch progress (`Continue Watching`) and user favorites.
+ * Provides:
+ * 1. Recursive directory scanner for mounted SMB/CIFS shares or local folders (`.mp4`, `.mkv`, `.webm`, `.ts`, `.m4v`, `.avi`, `.m3u8`).
+ * 2. Smart filename metadata parser (Title, Year, Resolution `4K`/`1080p`/`720p`, Codec `HEVC`/`H.264`/`AV1`, Audio `EAC3`/`Atmos`/`DTS`/`AAC`).
+ * 3. Sidecar `.nfo` XML metadata parser (Kodi / Jellyfin / Plex compatible) & sidecar poster/backdrop artwork detector.
+ * 4. Sidecar `.srt` to `.vtt` (WebVTT) subtitle converter so HTML5 `<track>` can render `.srt` subtitles natively.
+ * 5. `#EXTM3U` playlist parser for IPTV and network stream lists with unique per-channel artwork.
+ * 6. Persistent in-memory watch progress (`Continue Watching`) & favorites state that dynamically populates
+ *    Samsung Smart Hub Preview (`bg_service`) tiles with deep-link resume timestamps (`watch/<id>?t=<sec>`).
  */
-'use strict';
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import type {
+  SmartHubPreviewPayload,
+  SmartHubPreviewSection
+} from '../src/types/tizen.ts';
+import type {
+  CatalogItem,
+  CustomStreamInput,
+  MediaCatalogManager,
+  MediaCatalogManagerOptions,
+  MediaDirectoryEntry,
+  ParsedFilenameMetadata,
+  ScanDirectoryOptions,
+  SidecarNfoMetadata,
+  SubtitleFormat,
+  WatchProgressEntry
+} from './types.ts';
 
-const VIDEO_EXTENSIONS = new Set([
+export const VIDEO_EXTENSIONS: ReadonlySet<string> = new Set([
   '.mp4',
   '.mkv',
   '.webm',
   '.m4v',
   '.mov',
-  '.avi',
   '.ts',
+  '.avi',
   '.m3u8'
 ]);
 
-const MIME_BY_EXT = {
+export const MIME_BY_EXT: Readonly<Record<string, string>> = {
   '.mp4': 'video/mp4',
   '.m4v': 'video/mp4',
+  '.mov': 'video/quicktime',
   '.webm': 'video/webm',
   '.mkv': 'video/x-matroska',
-  '.mov': 'video/quicktime',
-  '.avi': 'video/x-msvideo',
   '.ts': 'video/mp2t',
+  '.avi': 'video/x-msvideo',
   '.m3u8': 'application/vnd.apple.mpegurl'
 };
 
 /**
- * Parses a raw filename (e.g. "Blade.Runner.2049.2017.2160p.UHD.BluRay.x265.10bit.HDR.AC3.mkv")
+ * Parses scene/release filenames like:
+ * - `Dune.Part.Two.2024.2160p.UHD.BluRay.x265.10bit.HDR.EAC3.5.1.mkv`
+ * - `The_Matrix_1999_1080p_BluRay_H264_AAC.mp4`
+ * - `Severance.S01E04.1080p.WEBRip.HEVC.mkv`
  * into structured movie/episode metadata.
  */
-function parseMediaFilename(filename) {
+export function parseMediaFilename(filename: string): ParsedFilenameMetadata {
   const ext = path.extname(filename);
   const rawBase = path.basename(filename, ext);
   const normalized = rawBase.replace(/[._]+/g, ' ').trim();
 
-  // Detect resolution
   let resolution = 'HD';
   if (/\b(2160p|4k|uhd)\b/i.test(normalized)) {
     resolution = '4K UHD';
@@ -60,7 +76,6 @@ function parseMediaFilename(filename) {
     resolution = '480p';
   }
 
-  // Detect video codec
   let videoCodec = ext.toLowerCase() === '.mkv' ? 'MKV' : 'H.264';
   if (/\b(x265|h265|hevc)\b/i.test(normalized)) {
     videoCodec = 'HEVC';
@@ -70,10 +85,8 @@ function parseMediaFilename(filename) {
     videoCodec = 'AV1';
   }
 
-  // Detect HDR
   const isHdr = /\b(hdr|hdr10|dv|dolby\s*vision)\b/i.test(normalized);
 
-  // Detect audio codec
   let audioCodec = 'Stereo';
   if (/\b(atmos|truehd)\b/i.test(normalized)) {
     audioCodec = 'Dolby Atmos';
@@ -87,13 +100,12 @@ function parseMediaFilename(filename) {
     audioCodec = 'AAC';
   }
 
-  // Detect Season/Episode (e.g. S01E04)
   const episodeMatch = normalized.match(/\bS(\d{1,2})E(\d{1,2})\b/i);
-  const episodeTag = episodeMatch
-    ? `S${episodeMatch[1].padStart(2, '0')}E${episodeMatch[2].padStart(2, '0')}`
-    : null;
+  const sNum = episodeMatch?.[1];
+  const eNum = episodeMatch?.[2];
+  const episodeTag =
+    sNum && eNum ? `S${sNum.padStart(2, '0')}E${eNum.padStart(2, '0')}` : null;
 
-  // Strip common release noise tokens first so the release year sits at the end of the title segment
   const beforeQuality = normalized
     .replace(
       /\b(2160p|1080p|720p|480p|4k|uhd|bluray|brrip|webrip|web-dl|web|hdtv|remux|x264|x265|h264|h265|hevc|10bit|hdr|hdr10|dv|aac|ac3|eac3|dts|proper|repack)\b.*$/i,
@@ -101,18 +113,19 @@ function parseMediaFilename(filename) {
     )
     .trim();
 
-  // Detect Year (1920..2039) greedily at the end of beforeQuality
-  let year = null;
+  let year: number | null = null;
   let titlePart = beforeQuality;
 
-  if (episodeMatch) {
+  if (episodeMatch && typeof episodeMatch.index === 'number') {
     titlePart = normalized.slice(0, episodeMatch.index).trim();
   }
 
   const yearMatch = titlePart.match(/^(.*)\s+\(?((?:19|20)\d{2})\)?$/);
-  if (yearMatch && yearMatch[1].trim().length > 0) {
-    titlePart = yearMatch[1].trim();
-    year = Number(yearMatch[2]);
+  const rawTitlePrefix = yearMatch?.[1]?.trim();
+  const rawYearStr = yearMatch?.[2];
+  if (rawTitlePrefix && rawTitlePrefix.length > 0 && rawYearStr) {
+    titlePart = rawTitlePrefix;
+    year = Number(rawYearStr);
   }
 
   const cleanTitle = (titlePart || rawBase)
@@ -120,7 +133,6 @@ function parseMediaFilename(filename) {
     .replace(/[-–—]+$/, '')
     .trim();
 
-  // Recommend AVPlay on Tizen if container is MKV/AVI/TS or codec is HEVC/AC3/DTS
   const prefersAvPlay =
     ['.mkv', '.avi', '.ts'].includes(ext.toLowerCase()) ||
     videoCodec === 'HEVC' ||
@@ -135,7 +147,7 @@ function parseMediaFilename(filename) {
     audioCodec,
     isHdr,
     container: ext.replace('.', '').toUpperCase(),
-    mimeType: MIME_BY_EXT[ext.toLowerCase()] || 'video/mp4',
+    mimeType: MIME_BY_EXT[ext.toLowerCase()] ?? 'video/mp4',
     prefersAvPlay
   };
 }
@@ -143,20 +155,21 @@ function parseMediaFilename(filename) {
 /**
  * Parses an optional Kodi/Jellyfin `.nfo` XML file if present alongside a movie.
  */
-function parseSidecarNfo(nfoPath) {
+export function parseSidecarNfo(nfoPath: string): SidecarNfoMetadata | null {
   try {
     const xml = fs.readFileSync(nfoPath, 'utf8');
-    const extractTag = (tag) => {
+    const extractTag = (tag: string): string | null => {
       const m = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'));
-      return m ? m[1].trim() : null;
+      return m?.[1] ? m[1].trim() : null;
     };
+    const yearStr = extractTag('year');
     return {
       title: extractTag('title'),
-      year: extractTag('year') ? Number(extractTag('year')) : null,
-      plot: extractTag('plot') || extractTag('outline'),
+      year: yearStr ? Number(yearStr) : null,
+      plot: extractTag('plot') ?? extractTag('outline'),
       rating: extractTag('rating')
     };
-  } catch (err) {
+  } catch (_err: unknown) {
     return null;
   }
 }
@@ -164,13 +177,12 @@ function parseSidecarNfo(nfoPath) {
 /**
  * Converts SubRip (`.srt`) subtitle text to WebVTT (`.vtt`) format.
  */
-function convertSrtToVtt(srtContent) {
+export function convertSrtToVtt(srtContent: string): string {
   const normalized = String(srtContent || '')
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .trim();
 
-  // Convert comma millisecond separator (00:01:23,456 --> 00:01:25,789) to dot (00:01:23.456)
   const body = normalized.replace(
     /(\d{2}:\d{2}:\d{2}),(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}),(\d{3})/g,
     '$1.$2 --> $3.$4'
@@ -180,31 +192,33 @@ function convertSrtToVtt(srtContent) {
 }
 
 /**
- * Parses an `#EXTM3U` playlist string into catalog items.
+ * Parses an `#EXTM3U` playlist string into catalog items, assigning each item
+ * a unique deterministic poster and stage backdrop SVG if no custom `tvg-logo` is present.
  */
-function parseM3uPlaylist(m3uContent, sourceLabel) {
+export function parseM3uPlaylist(m3uContent: string, sourceLabel?: string): CatalogItem[] {
   const lines = String(m3uContent || '')
     .replace(/\r\n/g, '\n')
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean);
 
-  const items = [];
-  let pendingInfo = null;
+  const items: CatalogItem[] = [];
+  let pendingInfo: { title: string; logo: string | null; group: string } | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (!line) continue;
     if (line.startsWith('#EXTINF:')) {
       const titleMatch = line.match(/,(.*)$/);
       const logoMatch = line.match(/tvg-logo="([^"]+)"/i);
       const groupMatch = line.match(/group-title="([^"]+)"/i);
       pendingInfo = {
-        title: titleMatch ? titleMatch[1].trim() : 'Stream Channel',
-        logo: logoMatch ? logoMatch[1] : null,
-        group: groupMatch ? groupMatch[1] : sourceLabel || 'M3U Playlist'
+        title: titleMatch?.[1] ? titleMatch[1].trim() : 'Stream Channel',
+        logo: logoMatch?.[1] ?? null,
+        group: groupMatch?.[1] ?? (sourceLabel || 'M3U Playlist')
       };
     } else if (!line.startsWith('#')) {
-      const info = pendingInfo || {
+      const info = pendingInfo ?? {
         title: path.basename(line),
         logo: null,
         group: sourceLabel || 'M3U Playlist'
@@ -213,7 +227,7 @@ function parseM3uPlaylist(m3uContent, sourceLabel) {
         'm3u-' +
         crypto
           .createHash('sha1')
-          .update(line)
+          .update(line + ':' + info.title)
           .digest('hex')
           .slice(0, 12);
 
@@ -227,7 +241,8 @@ function parseM3uPlaylist(m3uContent, sourceLabel) {
         sourceType: 'm3u',
         streamUrl: line,
         image_ratio: '16by9',
-        image_url: info.logo || '/assets/posters/big-buck-bunny.svg',
+        image_url: info.logo ?? `/assets/posters/media-${id}.svg`,
+        backdrop_url: `/assets/backgrounds/media-${id}.svg`,
         action_data: `watch/${id}`,
         is_playable: true,
         resolution: parsedMeta.resolution,
@@ -242,25 +257,38 @@ function parseM3uPlaylist(m3uContent, sourceLabel) {
   return items;
 }
 
+function findFirstExistingFile(candidates: readonly string[]): string | null {
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 /**
- * Scans a local or SMB-mounted directory recursively (up to maxDepth) for video files.
+ * Scans a local or SMB-mounted directory recursively (up to maxDepth) for video files,
+ * sidecar subtitles (`.srt`/`.vtt`), sidecar `.nfo` metadata, and sidecar poster/backdrop images.
  */
-function scanMediaDirectory(rootDir, options) {
-  const opts = options || {};
+export function scanMediaDirectory(
+  rootDir: string,
+  options?: ScanDirectoryOptions
+): CatalogItem[] {
+  const opts: ScanDirectoryOptions = options ?? {};
   const maxDepth = typeof opts.maxDepth === 'number' ? opts.maxDepth : 4;
   const sourceLabel = opts.label || path.basename(rootDir) || 'SMB / Local Share';
-  const discovered = [];
+  const discovered: CatalogItem[] = [];
 
   if (!rootDir || !fs.existsSync(rootDir)) {
     return discovered;
   }
 
-  function walk(currentDir, depth) {
+  function walk(currentDir: string, depth: number): void {
     if (depth > maxDepth) return;
-    let entries = [];
+    let entries: fs.Dirent[] = [];
     try {
       entries = fs.readdirSync(currentDir, { withFileTypes: true });
-    } catch (err) {
+    } catch (_err: unknown) {
       return;
     }
 
@@ -273,10 +301,10 @@ function scanMediaDirectory(rootDir, options) {
         const ext = path.extname(entry.name).toLowerCase();
         if (!VIDEO_EXTENSIONS.has(ext)) continue;
 
-        let stat;
+        let stat: fs.Stats;
         try {
           stat = fs.statSync(fullPath);
-        } catch (err) {
+        } catch (_err: unknown) {
           continue;
         }
 
@@ -291,17 +319,14 @@ function scanMediaDirectory(rootDir, options) {
         const baseNoExt = path.join(currentDir, path.basename(entry.name, ext));
         const meta = parseMediaFilename(entry.name);
 
-        // Check for sidecar NFO
-        const nfoCandidate = fs.existsSync(baseNoExt + '.nfo')
-          ? baseNoExt + '.nfo'
-          : fs.existsSync(path.join(currentDir, 'movie.nfo'))
-            ? path.join(currentDir, 'movie.nfo')
-            : null;
+        const nfoCandidate = findFirstExistingFile([
+          baseNoExt + '.nfo',
+          path.join(currentDir, 'movie.nfo')
+        ]);
         const nfo = nfoCandidate ? parseSidecarNfo(nfoCandidate) : null;
 
-        // Check for sidecar Subtitles (.vtt or .srt)
-        let subtitlePath = null;
-        let subtitleFormat = null;
+        let subtitlePath: string | null = null;
+        let subtitleFormat: SubtitleFormat | null = null;
         if (fs.existsSync(baseNoExt + '.vtt')) {
           subtitlePath = baseNoExt + '.vtt';
           subtitleFormat = 'vtt';
@@ -316,6 +341,26 @@ function scanMediaDirectory(rootDir, options) {
           subtitleFormat = 'srt';
         }
 
+        // Detect optional sidecar poster & backdrop/fanart images in SMB folder
+        const posterFilePath = findFirstExistingFile([
+          baseNoExt + '-poster.jpg',
+          baseNoExt + '-poster.png',
+          baseNoExt + '.jpg',
+          baseNoExt + '.png',
+          path.join(currentDir, 'poster.jpg'),
+          path.join(currentDir, 'poster.png')
+        ]);
+        const backdropFilePath = findFirstExistingFile([
+          baseNoExt + '-fanart.jpg',
+          baseNoExt + '-fanart.png',
+          baseNoExt + '-backdrop.jpg',
+          baseNoExt + '-background.jpg',
+          path.join(currentDir, 'fanart.jpg'),
+          path.join(currentDir, 'backdrop.jpg'),
+          path.join(currentDir, 'background.jpg'),
+          path.join(currentDir, 'background.png')
+        ]);
+
         const title = (nfo && nfo.title) || meta.title;
         const year = (nfo && nfo.year) || meta.year;
         const badgeParts = [
@@ -324,7 +369,7 @@ function scanMediaDirectory(rootDir, options) {
           meta.resolution,
           meta.videoCodec,
           meta.audioCodec
-        ].filter(Boolean);
+        ].filter((part): part is string => Boolean(part));
 
         discovered.push({
           id,
@@ -351,8 +396,15 @@ function scanMediaDirectory(rootDir, options) {
           subtitleFormat,
           streamUrl: `/stream/${id}`,
           subtitleUrl: subtitlePath ? `/subtitles/${id}.vtt` : null,
+          posterFilePath,
+          backdropFilePath,
           image_ratio: '16by9',
-          image_url: `/assets/posters/media-${id}.svg`,
+          image_url: posterFilePath
+            ? `/artwork/${id}/poster`
+            : `/assets/posters/media-${id}.svg`,
+          backdrop_url: backdropFilePath
+            ? `/artwork/${id}/backdrop`
+            : `/assets/backgrounds/media-${id}.svg`,
           action_data: `watch/${id}`,
           is_playable: true
         });
@@ -366,8 +418,9 @@ function scanMediaDirectory(rootDir, options) {
 
 /**
  * Built-in open-source demo streams (Creative Commons Blender Foundation movies via public test MP4/HLS)
+ * Each open movie has its own distinct poster SVG and widescreen backdrop SVG.
  */
-function getBuiltInOpenStreams() {
+export function getBuiltInOpenStreams(): CatalogItem[] {
   return [
     {
       id: 'open-big-buck-bunny',
@@ -378,7 +431,8 @@ function getBuiltInOpenStreams() {
         'A large and lovable rabbit deals with three tiny bullies in this flagship Blender Foundation open movie.',
       category: 'open',
       sourceType: 'remote',
-      streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+      streamUrl:
+        'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
       mimeType: 'video/mp4',
       container: 'MP4',
       resolution: '1080p',
@@ -389,6 +443,7 @@ function getBuiltInOpenStreams() {
       subtitleUrl: '/subtitles/demo.vtt',
       image_ratio: '16by9',
       image_url: '/assets/posters/big-buck-bunny.svg',
+      backdrop_url: '/assets/backgrounds/big-buck-bunny.svg',
       action_data: 'watch/open-big-buck-bunny',
       is_playable: true
     },
@@ -401,7 +456,8 @@ function getBuiltInOpenStreams() {
         'A lonely young woman, Sintel, helps and befriends a dragon, whom she calls Scales.',
       category: 'open',
       sourceType: 'remote',
-      streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
+      streamUrl:
+        'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
       mimeType: 'video/mp4',
       container: 'MP4',
       resolution: '1080p',
@@ -412,6 +468,7 @@ function getBuiltInOpenStreams() {
       subtitleUrl: '/subtitles/demo.vtt',
       image_ratio: '16by9',
       image_url: '/assets/posters/sintel.svg',
+      backdrop_url: '/assets/backgrounds/sintel.svg',
       action_data: 'watch/open-sintel',
       is_playable: true
     },
@@ -424,7 +481,8 @@ function getBuiltInOpenStreams() {
         'In a futuristic Amsterdam, a group of soldiers and scientists gather at the Oude Kerk to stage a crucial event from the past.',
       category: 'open',
       sourceType: 'remote',
-      streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
+      streamUrl:
+        'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
       mimeType: 'video/mp4',
       container: 'MP4',
       resolution: '1080p',
@@ -435,6 +493,7 @@ function getBuiltInOpenStreams() {
       subtitleUrl: '/subtitles/demo.vtt',
       image_ratio: '16by9',
       image_url: '/assets/posters/tears-of-steel.svg',
+      backdrop_url: '/assets/backgrounds/tears-of-steel.svg',
       action_data: 'watch/open-tears-of-steel',
       is_playable: true
     },
@@ -447,7 +506,8 @@ function getBuiltInOpenStreams() {
         'Proog and Emo explore the infinite, shifting rooms of a mysterious giant Machine.',
       category: 'open',
       sourceType: 'remote',
-      streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
+      streamUrl:
+        'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
       mimeType: 'video/mp4',
       container: 'MP4',
       resolution: '1080p',
@@ -457,20 +517,23 @@ function getBuiltInOpenStreams() {
       hasSubtitles: true,
       subtitleUrl: '/subtitles/demo.vtt',
       image_ratio: '16by9',
-      image_url: '/assets/posters/cosmos-laundromat.svg',
+      image_url: '/assets/posters/elephants-dream.svg',
+      backdrop_url: '/assets/backgrounds/elephants-dream.svg',
       action_data: 'watch/open-elephants-dream',
       is_playable: true
     }
   ];
 }
 
-function createMediaCatalogManager(options) {
-  const opts = options || {};
-  const mediaDirs = [];
-  const customStreams = [];
-  const m3uSources = [];
-  const progressMap = {}; // id -> { positionSec, durationSec, updatedAt }
-  const favoritesSet = new Set();
+export function createMediaCatalogManager(
+  options?: MediaCatalogManagerOptions
+): MediaCatalogManager {
+  const opts: MediaCatalogManagerOptions = options ?? {};
+  const mediaDirs: MediaDirectoryEntry[] = [];
+  const customStreams: CatalogItem[] = [];
+  const m3uSources: CatalogItem[] = [];
+  const progressMap: Record<string, WatchProgressEntry> = {};
+  const favoritesSet = new Set<string>();
 
   if (opts.initialMediaDir && fs.existsSync(opts.initialMediaDir)) {
     mediaDirs.push({
@@ -480,7 +543,7 @@ function createMediaCatalogManager(options) {
     });
   }
 
-  function addMediaDirectory(dirPath, label) {
+  function addMediaDirectory(dirPath: string, label?: string): MediaDirectoryEntry {
     if (!dirPath || typeof dirPath !== 'string') {
       throw new Error('Directory path is required');
     }
@@ -492,7 +555,7 @@ function createMediaCatalogManager(options) {
     if (existing) {
       return existing;
     }
-    const entry = {
+    const entry: MediaDirectoryEntry = {
       id: 'dir-' + crypto.createHash('sha1').update(resolved).digest('hex').slice(0, 8),
       path: resolved,
       label: label || path.basename(resolved) || 'SMB Share'
@@ -501,13 +564,13 @@ function createMediaCatalogManager(options) {
     return entry;
   }
 
-  function addM3uContent(m3uText, label) {
+  function addM3uContent(m3uText: string, label?: string): CatalogItem[] {
     const items = parseM3uPlaylist(m3uText, label || 'M3U Playlist');
     m3uSources.push(...items);
     return items;
   }
 
-  function addCustomStream(streamInfo) {
+  function addCustomStream(streamInfo: CustomStreamInput): CatalogItem {
     if (!streamInfo || !streamInfo.title || !streamInfo.streamUrl) {
       throw new Error('Both title and streamUrl are required');
     }
@@ -519,16 +582,18 @@ function createMediaCatalogManager(options) {
         .digest('hex')
         .slice(0, 10);
     const meta = parseMediaFilename(streamInfo.title);
-    const item = {
+    const item: CatalogItem = {
       id,
       title: streamInfo.title,
-      year: streamInfo.year || meta.year,
-      subtitle: streamInfo.subtitle || `Custom Stream • ${meta.resolution} • ${meta.videoCodec}`,
-      description: streamInfo.description || `Direct network stream (${streamInfo.streamUrl})`,
-      category: streamInfo.category || 'smb',
+      year: streamInfo.year ?? meta.year,
+      subtitle:
+        streamInfo.subtitle || `Custom Stream • ${meta.resolution} • ${meta.videoCodec}`,
+      description:
+        streamInfo.description || `Direct network stream (${streamInfo.streamUrl})`,
+      category: streamInfo.category ?? 'smb',
       sourceType: 'remote',
       streamUrl: streamInfo.streamUrl,
-      subtitleUrl: streamInfo.subtitleUrl || null,
+      subtitleUrl: streamInfo.subtitleUrl ?? null,
       hasSubtitles: Boolean(streamInfo.subtitleUrl),
       resolution: streamInfo.resolution || meta.resolution,
       videoCodec: streamInfo.videoCodec || meta.videoCodec,
@@ -537,6 +602,7 @@ function createMediaCatalogManager(options) {
       prefersAvPlay: Boolean(streamInfo.prefersAvPlay || meta.prefersAvPlay),
       image_ratio: '16by9',
       image_url: streamInfo.image_url || `/assets/posters/media-${id}.svg`,
+      backdrop_url: streamInfo.backdrop_url || `/assets/backgrounds/media-${id}.svg`,
       action_data: `watch/${id}`,
       is_playable: true
     };
@@ -544,26 +610,36 @@ function createMediaCatalogManager(options) {
     return item;
   }
 
-  function updateWatchProgress(itemId, positionSec, durationSec) {
+  function updateWatchProgress(
+    itemId: string,
+    positionSec: number,
+    durationSec: number
+  ): WatchProgressEntry | null {
     if (!itemId) return null;
     const pos = Math.max(0, Number(positionSec) || 0);
     const dur = Math.max(0, Number(durationSec) || 0);
-    // If watched >= 95%, clear from Continue Watching
     if (dur > 0 && pos / dur >= 0.95) {
       delete progressMap[itemId];
-      return { itemId, completed: true, positionSec: 0, durationSec: dur };
+      return {
+        itemId,
+        completed: true,
+        positionSec: 0,
+        durationSec: dur,
+        percent: 100
+      };
     }
-    progressMap[itemId] = {
+    const entry: WatchProgressEntry = {
       itemId,
       positionSec: Math.round(pos),
       durationSec: Math.round(dur),
       percent: dur > 0 ? Math.min(99, Math.round((pos / dur) * 100)) : 0,
       updatedAt: new Date().toISOString()
     };
-    return progressMap[itemId];
+    progressMap[itemId] = entry;
+    return entry;
   }
 
-  function toggleFavorite(itemId) {
+  function toggleFavorite(itemId: string): boolean {
     if (!itemId) return false;
     if (favoritesSet.has(itemId)) {
       favoritesSet.delete(itemId);
@@ -573,57 +649,58 @@ function createMediaCatalogManager(options) {
     return true;
   }
 
-  function getAllItems(baseOrigin) {
+  function getAllItems(baseOrigin?: string): CatalogItem[] {
     const origin = (baseOrigin || '').replace(/\/+$/, '');
-    const scannedFiles = [];
+    const scannedFiles: CatalogItem[] = [];
     for (const dir of mediaDirs) {
       scannedFiles.push(...scanMediaDirectory(dir.path, { label: dir.label }));
     }
 
-    const rawItems = [
+    const rawItems: CatalogItem[] = [
       ...scannedFiles,
       ...customStreams,
       ...m3uSources,
       ...getBuiltInOpenStreams()
     ];
 
+    const hydrateUrl = (u: string | null | undefined): string => {
+      if (!u) return '';
+      if (origin && u.startsWith('/')) return origin + u;
+      return u;
+    };
+
     return rawItems.map((item) => {
-      const progress = progressMap[item.id] || null;
+      const progress = progressMap[item.id] ?? null;
       const isFavorite = favoritesSet.has(item.id);
-      const hydrateUrl = (u) => {
-        if (!u) return u;
-        if (origin && u.startsWith('/')) return origin + u;
-        return u;
-      };
       return {
         ...item,
         streamUrl: hydrateUrl(item.streamUrl),
-        subtitleUrl: hydrateUrl(item.subtitleUrl),
+        subtitleUrl: item.subtitleUrl ? hydrateUrl(item.subtitleUrl) : null,
         image_url: hydrateUrl(item.image_url),
+        backdrop_url: hydrateUrl(item.backdrop_url),
         progress,
         isFavorite
       };
     });
   }
 
-  function getItemById(itemId, baseOrigin) {
+  function getItemById(itemId: string, baseOrigin?: string): CatalogItem | null {
     const all = getAllItems(baseOrigin);
-    return all.find((item) => item.id === itemId) || null;
+    return all.find((item) => item.id === itemId) ?? null;
   }
 
-  /**
-   * Builds the Samsung Smart Hub Preview (`bg_service`) payload dynamically:
-   * - Section 1: "Continue Watching" (if user has in-progress movies)
-   * - Section 2: "SMB & Local Movies" (if local/SMB shares are mounted)
-   * - Section 3: "Featured Open Streams"
-   */
-  function buildSmartHubPreview(baseOrigin) {
+  function buildSmartHubPreview(baseOrigin?: string): SmartHubPreviewPayload {
     const items = getAllItems(baseOrigin);
-    const sections = [];
+    const sections: SmartHubPreviewSection[] = [];
 
     const continueWatching = items
-      .filter((i) => i.progress && i.progress.positionSec > 5)
-      .sort((a, b) => (b.progress.updatedAt || '').localeCompare(a.progress.updatedAt || ''));
+      .filter(
+        (i): i is CatalogItem & { progress: WatchProgressEntry } =>
+          Boolean(i.progress && i.progress.positionSec > 5)
+      )
+      .sort((a, b) =>
+        (b.progress.updatedAt || '').localeCompare(a.progress.updatedAt || '')
+      );
 
     if (continueWatching.length > 0) {
       sections.push({
@@ -685,15 +762,3 @@ function createMediaCatalogManager(options) {
     buildSmartHubPreview
   };
 }
-
-module.exports = {
-  VIDEO_EXTENSIONS,
-  MIME_BY_EXT,
-  parseMediaFilename,
-  parseSidecarNfo,
-  convertSrtToVtt,
-  parseM3uPlaylist,
-  scanMediaDirectory,
-  getBuiltInOpenStreams,
-  createMediaCatalogManager
-};
