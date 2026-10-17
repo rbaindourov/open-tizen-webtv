@@ -108,7 +108,7 @@ export function parseMediaFilename(filename: string): ParsedFilenameMetadata {
 
   const beforeQuality = normalized
     .replace(
-      /\b(2160p|1080p|720p|480p|4k|uhd|bluray|brrip|webrip|web-dl|web|hdtv|remux|x264|x265|h264|h265|hevc|10bit|hdr|hdr10|dv|aac|ac3|eac3|dts|proper|repack)\b.*$/i,
+      /\b(2160p|1080p|720p|480p|4k|uhd|bluray|brrip|webrip|web[-\s]?dl|hdtv|remux|x264|x265|h264|h265|hevc|10bit|hdr|hdr10|dv|aac|ac3|eac3|dts|proper|repack)\b.*$/i,
       ''
     )
     .trim();
@@ -120,7 +120,7 @@ export function parseMediaFilename(filename: string): ParsedFilenameMetadata {
     titlePart = normalized.slice(0, episodeMatch.index).trim();
   }
 
-  const yearMatch = titlePart.match(/^(.*)\s+\(?((?:19|20)\d{2})\)?$/);
+  const yearMatch = titlePart.match(/^(.*)\s+[\(\[]?((?:19|20)\d{2})[\)\]]?$/);
   const rawTitlePrefix = yearMatch?.[1]?.trim();
   const rawYearStr = yearMatch?.[2];
   if (rawTitlePrefix && rawTitlePrefix.length > 0 && rawYearStr) {
@@ -179,12 +179,13 @@ export function parseSidecarNfo(nfoPath: string): SidecarNfoMetadata | null {
  */
 export function convertSrtToVtt(srtContent: string): string {
   const normalized = String(srtContent || '')
+    .replace(/^\uFEFF/, '')
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .trim();
 
   const body = normalized.replace(
-    /(\d{2}:\d{2}:\d{2}),(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}),(\d{3})/g,
+    /(\d{1,2}:\d{2}:\d{2}),(\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}),(\d{3})/g,
     '$1.$2 --> $3.$4'
   );
 
@@ -566,7 +567,14 @@ export function createMediaCatalogManager(
 
   function addM3uContent(m3uText: string, label?: string): CatalogItem[] {
     const items = parseM3uPlaylist(m3uText, label || 'M3U Playlist');
-    m3uSources.push(...items);
+    for (const item of items) {
+      const existingIdx = m3uSources.findIndex((existing) => existing.id === item.id);
+      if (existingIdx !== -1) {
+        m3uSources[existingIdx] = item;
+      } else {
+        m3uSources.push(item);
+      }
+    }
     return items;
   }
 
@@ -606,7 +614,12 @@ export function createMediaCatalogManager(
       action_data: `watch/${id}`,
       is_playable: true
     };
-    customStreams.push(item);
+    const existingIdx = customStreams.findIndex((existing) => existing.id === id);
+    if (existingIdx !== -1) {
+      customStreams[existingIdx] = item;
+    } else {
+      customStreams.push(item);
+    }
     return item;
   }
 

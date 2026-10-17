@@ -26,6 +26,92 @@ export interface ApiResponsePayload {
   readonly progress?: WatchProgressEntry | null;
 }
 
+/**
+ * Escapes HTML special characters to prevent DOM injection from untrusted M3U or NFO strings.
+ */
+export function escapeHtml(raw: string | number | null | undefined): string {
+  var str = String(raw !== undefined && raw !== null ? raw : '');
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * ES5-compatible shallow clone helper for CatalogItem updates (avoids ES6 Object.assign on Tizen 2.4).
+ */
+export function cloneCatalogItem(
+  base: CatalogItem,
+  overrides: Partial<CatalogItem>
+): CatalogItem {
+  var copy: Record<string, unknown> = {};
+  var sourceRecord = base as unknown as Record<string, unknown>;
+  var overrideRecord = overrides as unknown as Record<string, unknown>;
+  var key: string;
+
+  for (key in sourceRecord) {
+    if (Object.prototype.hasOwnProperty.call(sourceRecord, key)) {
+      copy[key] = sourceRecord[key];
+    }
+  }
+  for (key in overrideRecord) {
+    if (
+      Object.prototype.hasOwnProperty.call(overrideRecord, key) &&
+      overrideRecord[key] !== undefined
+    ) {
+      copy[key] = overrideRecord[key];
+    }
+  }
+  return copy as unknown as CatalogItem;
+}
+
+/**
+ * Resolves relative server routes (`/api/*`, `/log`, `/assets/*`) against the configured
+ * media server origin so the UI works both over HTTP and inside a `file://` Tizen `.wgt` package.
+ */
+export function resolveServerUrl(pathOrUrl: string, explicitBaseDomain?: string): string {
+  if (!pathOrUrl) {
+    return '';
+  }
+  if (/^https?:\/\//i.test(pathOrUrl)) {
+    return pathOrUrl;
+  }
+
+  var base = explicitBaseDomain || '';
+  if (!base && typeof window !== 'undefined') {
+    var winObj = window as unknown as {
+      OPEN_WEBTV_CONFIG?: { manifestDomain?: string };
+      ManifestLoader?: { DEFAULT_OPTIONS?: { manifestDomain?: string } };
+      location?: { protocol?: string; origin?: string };
+    };
+    if (winObj.OPEN_WEBTV_CONFIG && winObj.OPEN_WEBTV_CONFIG.manifestDomain) {
+      base = winObj.OPEN_WEBTV_CONFIG.manifestDomain;
+    } else if (
+      winObj.location &&
+      winObj.location.protocol &&
+      /^https?:$/i.test(winObj.location.protocol) &&
+      winObj.location.origin
+    ) {
+      base = winObj.location.origin;
+    } else if (
+      winObj.ManifestLoader &&
+      winObj.ManifestLoader.DEFAULT_OPTIONS &&
+      winObj.ManifestLoader.DEFAULT_OPTIONS.manifestDomain
+    ) {
+      base = winObj.ManifestLoader.DEFAULT_OPTIONS.manifestDomain;
+    }
+  }
+
+  if (!base) {
+    return pathOrUrl;
+  }
+  var cleanBase = String(base).replace(/\/+$/, '');
+  var cleanPath = String(pathOrUrl).charAt(0) === '/' ? pathOrUrl : '/' + pathOrUrl;
+  return cleanBase + cleanPath;
+}
+
 export function initMediaCenterApp(): void {
   if (typeof document === 'undefined') {
     return;
@@ -51,14 +137,13 @@ export function initMediaCenterApp(): void {
 
   function sendTelemetryLog(message: string, data?: Record<string, unknown>): void {
     var xhr = new XMLHttpRequest();
-    xhr.open(
-      'GET',
+    var logUrl = resolveServerUrl(
       '/log?source=webtv-ui&message=' +
         encodeURIComponent(message) +
         '&data=' +
-        encodeURIComponent(JSON.stringify(data || {})),
-      true
+        encodeURIComponent(JSON.stringify(data || {}))
     );
+    xhr.open('GET', logUrl, true);
     xhr.send();
   }
 
@@ -68,7 +153,7 @@ export function initMediaCenterApp(): void {
     callback?: (status: number, resp: ApiResponsePayload | null) => void
   ): void {
     var xhr = new XMLHttpRequest();
-    xhr.open('POST', url, true);
+    xhr.open('POST', resolveServerUrl(url), true);
     xhr.setRequestHeader('Content-Type', 'application/json;charset=UTF-8');
     xhr.onreadystatechange = function (): void {
       if (xhr.readyState === 4) {
@@ -140,7 +225,7 @@ export function initMediaCenterApp(): void {
       if (ch.progress && ch.progress.percent > 0) {
         progressHtml =
           '<div class="webtv-progress-bar"><div class="webtv-progress-fill" style="width:' +
-          ch.progress.percent +
+          Math.min(100, Math.max(0, Number(ch.progress.percent) || 0)) +
           '%"></div></div>';
       }
       html +=
@@ -151,12 +236,12 @@ export function initMediaCenterApp(): void {
         '">' +
         '  <div class="webtv-channel-header">' +
         '    <div class="webtv-channel-name">' +
-        ch.title +
+        escapeHtml(ch.title) +
         '</div>' +
         starHtml +
         '  </div>' +
         '  <div class="webtv-channel-meta">' +
-        (ch.subtitle || ch.action_data) +
+        escapeHtml(ch.subtitle || ch.action_data) +
         '</div>' +
         progressHtml +
         '</div>';
@@ -165,6 +250,7 @@ export function initMediaCenterApp(): void {
   }
 
   function createFallbackItem(): CatalogItem {
+    var bgUrl = resolveServerUrl('/assets/background.svg');
     return {
       id: 'none',
       title: 'No Media Found',
@@ -178,14 +264,17 @@ export function initMediaCenterApp(): void {
       prefersAvPlay: false,
       streamUrl: '',
       image_ratio: '16by9',
-      image_url: '/assets/background.svg',
-      backdrop_url: '/assets/background.svg',
+      image_url: bgUrl,
+      backdrop_url: bgUrl,
       action_data: 'none',
       is_playable: false
     };
   }
 
   function renderApp(): void {
+    if (isPlayerOpen) {
+      return;
+    }
     applyFilters();
 
     var activeItem: CatalogItem =
@@ -220,21 +309,24 @@ export function initMediaCenterApp(): void {
         '<button type="button" class="' +
         cls +
         '" data-cat="' +
-        cat.id +
+        escapeHtml(cat.id) +
         '">' +
-        cat.label +
+        escapeHtml(cat.label) +
         '</button>';
     }
 
     var badgesHtml = '';
     if (activeItem.resolution) {
-      badgesHtml += '<span class="webtv-badge">' + activeItem.resolution + '</span>';
+      badgesHtml +=
+        '<span class="webtv-badge">' + escapeHtml(activeItem.resolution) + '</span>';
     }
     if (activeItem.videoCodec) {
-      badgesHtml += '<span class="webtv-badge">' + activeItem.videoCodec + '</span>';
+      badgesHtml +=
+        '<span class="webtv-badge">' + escapeHtml(activeItem.videoCodec) + '</span>';
     }
     if (activeItem.audioCodec) {
-      badgesHtml += '<span class="webtv-badge">' + activeItem.audioCodec + '</span>';
+      badgesHtml +=
+        '<span class="webtv-badge">' + escapeHtml(activeItem.audioCodec) + '</span>';
     }
     if (activeItem.hasSubtitles) {
       badgesHtml += '<span class="webtv-badge">CC / VTT</span>';
@@ -245,8 +337,9 @@ export function initMediaCenterApp(): void {
       badgesHtml += '<span class="webtv-badge">HTTP 206 Byte-Range</span>';
     }
 
-    var stageBackgroundUrl: string =
-      activeItem.backdrop_url || activeItem.image_url || '/assets/background.svg';
+    var stageBackgroundUrl: string = resolveServerUrl(
+      activeItem.backdrop_url || activeItem.image_url || '/assets/background.svg'
+    );
 
     container.innerHTML =
       '<div class="webtv-shell">' +
@@ -265,7 +358,7 @@ export function initMediaCenterApp(): void {
       tabsHtml +
       '    </div>' +
       '    <input type="text" id="catalog-search" class="webtv-search-input" placeholder="Search title, 4K, HEVC..." value="' +
-      searchQuery.replace(/"/g, '&quot;') +
+      escapeHtml(searchQuery) +
       '" />' +
       '    <div class="webtv-channel-list" id="channel-list">' +
       buildChannelListHtml() +
@@ -273,22 +366,22 @@ export function initMediaCenterApp(): void {
       '  </aside>' +
       '  <main class="webtv-main">' +
       '    <section class="webtv-stage" style="background-image: url(\'' +
-      stageBackgroundUrl +
+      escapeHtml(stageBackgroundUrl) +
       '\')">' +
       '      <div class="webtv-stage-overlay">' +
       '        <div class="webtv-badges">' +
       badgesHtml +
       '        </div>' +
       '        <h2 class="webtv-stage-title">' +
-      activeItem.title +
-      (activeItem.year ? ' (' + activeItem.year + ')' : '') +
+      escapeHtml(activeItem.title) +
+      (activeItem.year ? ' (' + escapeHtml(activeItem.year) + ')' : '') +
       '</h2>' +
       '        <p class="webtv-stage-desc">' +
-      (activeItem.description || activeItem.subtitle || '') +
+      escapeHtml(activeItem.description || activeItem.subtitle || '') +
       '</p>' +
       '        <div class="webtv-action-row">' +
       '          <button type="button" id="btn-play-primary" class="webtv-btn primary">' +
-      resumeLabel +
+      escapeHtml(resumeLabel) +
       '</button>' +
       (hasResume
         ? '<button type="button" id="btn-play-restart" class="webtv-btn">Restart from Beginning</button>'
@@ -305,13 +398,13 @@ export function initMediaCenterApp(): void {
       '        <h3>Media &amp; Tizen Runtime Status</h3>' +
       '        <div class="webtv-log-list">' +
       '          <div>• Active Stream: <code>' +
-      (activeItem.streamUrl || 'N/A') +
+      escapeHtml(activeItem.streamUrl || 'N/A') +
       '</code></div>' +
       '          <div>• Stage Backdrop Asset: <code>' +
-      stageBackgroundUrl +
+      escapeHtml(stageBackgroundUrl) +
       '</code></div>' +
       '          <div>• Deep-Link Action: <code>' +
-      activeItem.action_data +
+      escapeHtml(activeItem.action_data) +
       '</code></div>' +
       '          <div>• Decoder Mode: ' +
       (activeItem.prefersAvPlay
@@ -363,7 +456,7 @@ export function initMediaCenterApp(): void {
       '</div>' +
       '<div id="source-modal" class="webtv-modal-backdrop">' +
       '  <div class="webtv-modal-card">' +
-      '    <h3 style="font-size:20px;font-weight:800;">Connect SMB Share, Local Folder, or Stream URL</h3>' +
+      '    <h3 style="font-size:20px;font-weight:800;">Connect SMB Share, M3U Playlist, or Stream URL</h3>' +
       '    <div class="webtv-form-group">' +
       '      <label>Mount Local / SMB Directory Path on Server (e.g. /mnt/smb/movies)</label>' +
       '      <input type="text" id="input-smb-path" class="webtv-search-input" placeholder="/mnt/smb/movies" />' +
@@ -372,6 +465,10 @@ export function initMediaCenterApp(): void {
       '      <label>Or Add Direct Stream URL (.mp4, .mkv, .m3u8)</label>' +
       '      <input type="text" id="input-stream-title" class="webtv-search-input" placeholder="Movie or Channel Title" />' +
       '      <input type="text" id="input-stream-url" class="webtv-search-input" placeholder="http://192.168.1.50:8096/Videos/movie.mkv" />' +
+      '    </div>' +
+      '    <div class="webtv-form-group">' +
+      '      <label>Or Paste #EXTM3U Playlist Content</label>' +
+      '      <textarea id="input-m3u-content" class="webtv-search-input" rows="3" placeholder="#EXTM3U&#10;#EXTINF:-1,Channel Name&#10;http://192.168.1.50:8080/live.m3u8"></textarea>' +
       '    </div>' +
       '    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px;">' +
       '      <button type="button" id="btn-cancel-source" class="webtv-btn">Cancel</button>' +
@@ -468,10 +565,14 @@ export function initMediaCenterApp(): void {
           'input-stream-title'
         ) as HTMLInputElement | null;
         var urlInput = document.getElementById('input-stream-url') as HTMLInputElement | null;
+        var m3uInput = document.getElementById(
+          'input-m3u-content'
+        ) as HTMLTextAreaElement | null;
 
         var smbPath: string = smbInput ? smbInput.value.trim() : '';
         var streamTitle: string = titleInput ? titleInput.value.trim() : '';
         var streamUrl: string = urlInput ? urlInput.value.trim() : '';
+        var m3uContent: string = m3uInput ? m3uInput.value.trim() : '';
 
         if (smbPath) {
           postJson('/api/sources/smb', { path: smbPath }, function (status, resp): void {
@@ -481,6 +582,18 @@ export function initMediaCenterApp(): void {
               renderApp();
             }
           });
+        } else if (m3uContent) {
+          postJson(
+            '/api/sources/m3u',
+            { content: m3uContent },
+            function (status, resp): void {
+              if (status === 200 && resp && resp.items) {
+                allItems = resp.items;
+                activeCategory = 'm3u';
+                renderApp();
+              }
+            }
+          );
         } else if (streamTitle && streamUrl) {
           postJson(
             '/api/sources/stream',
@@ -531,7 +644,7 @@ export function initMediaCenterApp(): void {
     if (btnAspect) {
       btnAspect.onclick = function (): void {
         if (playerInstance && btnAspect) {
-          var mode = playerInstance.cycleAspectMode();
+          var mode: string = playerInstance.cycleAspectMode();
           btnAspect.textContent = 'Aspect: ' + mode;
         }
       };
@@ -540,7 +653,7 @@ export function initMediaCenterApp(): void {
     if (btnRate) {
       btnRate.onclick = function (): void {
         if (playerInstance && btnRate) {
-          var rate = playerInstance.cyclePlaybackRate();
+          var rate: number = playerInstance.cyclePlaybackRate();
           btnRate.textContent = 'Speed: ' + rate + 'x';
         }
       };
@@ -575,7 +688,7 @@ export function initMediaCenterApp(): void {
         for (var i = 0; i < allItems.length; i++) {
           var current = allItems[i];
           if (current && current.id === item.id) {
-            allItems[i] = Object.assign({}, current, {
+            allItems[i] = cloneCatalogItem(current, {
               isFavorite: Boolean(resp.isFavorite)
             });
           }
@@ -656,7 +769,7 @@ export function initMediaCenterApp(): void {
           for (var i = 0; i < allItems.length; i++) {
             var existing = allItems[i];
             if (existing && existing.id === itemId) {
-              allItems[i] = Object.assign({}, existing, {
+              allItems[i] = cloneCatalogItem(existing, {
                 progress:
                   resp.progress && !resp.progress.completed ? resp.progress : null
               });
@@ -789,7 +902,7 @@ export function initMediaCenterApp(): void {
       });
     }
   };
-  xhr.open('GET', '/api/catalog', true);
+  xhr.open('GET', resolveServerUrl('/api/catalog'), true);
   xhr.send();
 }
 

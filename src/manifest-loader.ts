@@ -13,6 +13,7 @@ export interface ManifestElementLike {
   type?: string;
   href?: string;
   src?: string;
+  async?: boolean;
   className?: string;
   textContent?: string | null;
   style?: { display?: string };
@@ -184,6 +185,7 @@ export function injectManifestAssets(
       var resolvedJs: string = resolveUrl(opts.manifestDomain, scriptSrc);
       var scriptTag: ManifestElementLike = targetDoc.createElement('script');
       scriptTag.type = 'text/javascript';
+      scriptTag.async = false;
       scriptTag.src = resolvedJs;
       body.appendChild(scriptTag);
       injected.js.push(resolvedJs);
@@ -341,7 +343,11 @@ export function setupBootScreenController(
 
   if (targetDoc.addEventListener) {
     targetDoc.addEventListener('keydown', function (e): void {
-      if (!fallbackPanel || fallbackPanel.className?.indexOf('visible') === -1) {
+      if (
+        !fallbackPanel ||
+        !fallbackPanel.className ||
+        fallbackPanel.className.indexOf('visible') === -1
+      ) {
         return;
       }
       if (e.keyCode === 37 || e.keyCode === 38) {

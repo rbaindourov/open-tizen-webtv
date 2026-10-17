@@ -88,6 +88,11 @@ export function buildWgtPackage(rootDir?: string): string {
       'utf8'
     );
   }
+  fs.writeFileSync(
+    path.join(stagingServiceDir, 'package.json'),
+    JSON.stringify({ type: 'commonjs' }, null, 2) + '\n',
+    'utf8'
+  );
 
   // Also emit compiled 10-foot UI bundles into dist/public/
   const publicSrcDir = path.join(baseDir, 'dev-server', 'public');
@@ -106,7 +111,6 @@ export function buildWgtPackage(rootDir?: string): string {
   execFileSync(
     'zip',
     [
-      '-r',
       '-q',
       wgtPath,
       'config.xml',
@@ -115,7 +119,11 @@ export function buildWgtPackage(rootDir?: string): string {
       'background.png',
       'app-ipc-bridge.js',
       'manifest-loader.js',
-      'service'
+      'service/config.json',
+      'service/sample.json',
+      'service/service.js',
+      'service/request.js',
+      'service/remoteLogger.js'
     ],
     { cwd: stagingDir }
   );

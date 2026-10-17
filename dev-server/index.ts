@@ -198,7 +198,10 @@ export function createDevServer(options?: DevServerOptions): DevServerInstance {
 
     if (rangeHeader) {
       const match = rangeHeader.match(/bytes=(\d*)-(\d*)/);
-      if (!match) {
+      const startStr = match?.[1] ?? '';
+      const endStr = match?.[2] ?? '';
+
+      if (!match || (startStr === '' && endStr === '') || fileSize === 0) {
         res.writeHead(416, {
           'Content-Range': `bytes */${fileSize}`,
           'Access-Control-Allow-Origin': '*'
@@ -207,12 +210,28 @@ export function createDevServer(options?: DevServerOptions): DevServerInstance {
         return;
       }
 
-      const startStr = match[1] ?? '';
-      const endStr = match[2] ?? '';
-      const start = startStr ? parseInt(startStr, 10) : 0;
-      const end = endStr ? Math.min(parseInt(endStr, 10), fileSize - 1) : fileSize - 1;
+      let start: number;
+      let end: number;
 
-      if (start >= fileSize || start > end) {
+      if (startStr === '') {
+        // RFC 7233 Section 2.1.2: suffix-byte-range-spec (bytes=-N requests final N bytes)
+        const suffixLength = parseInt(endStr, 10);
+        if (isNaN(suffixLength) || suffixLength <= 0) {
+          res.writeHead(416, {
+            'Content-Range': `bytes */${fileSize}`,
+            'Access-Control-Allow-Origin': '*'
+          });
+          res.end();
+          return;
+        }
+        start = Math.max(0, fileSize - suffixLength);
+        end = fileSize - 1;
+      } else {
+        start = parseInt(startStr, 10);
+        end = endStr ? Math.min(parseInt(endStr, 10), fileSize - 1) : fileSize - 1;
+      }
+
+      if (isNaN(start) || isNaN(end) || start >= fileSize || start > end) {
         res.writeHead(416, {
           'Content-Range': `bytes */${fileSize}`,
           'Access-Control-Allow-Origin': '*'
@@ -544,7 +563,7 @@ export function createDevServer(options?: DevServerOptions): DevServerInstance {
       const relAsset = pathname.replace(/^\/assets\//, '');
       const publicDir = path.resolve(__dirname, 'public');
       const safeAssetPath = path.resolve(publicDir, relAsset);
-      if (safeAssetPath.startsWith(publicDir)) {
+      if (safeAssetPath.startsWith(publicDir + path.sep)) {
         if (safeAssetPath.endsWith('.js')) {
           const tsCandidate = safeAssetPath.replace(/\.js$/, '.ts');
           if (fs.existsSync(tsCandidate)) {
@@ -567,7 +586,7 @@ export function createDevServer(options?: DevServerOptions): DevServerInstance {
 
     const srcDir = path.resolve(__dirname, '../src');
     const srcCandidate = path.resolve(srcDir, pathname.replace(/^\/+/, ''));
-    if (srcCandidate.startsWith(srcDir)) {
+    if (srcCandidate.startsWith(srcDir + path.sep)) {
       if (srcCandidate.endsWith('.js')) {
         const tsSrcCandidate = srcCandidate.replace(/\.js$/, '.ts');
         if (fs.existsSync(tsSrcCandidate)) {

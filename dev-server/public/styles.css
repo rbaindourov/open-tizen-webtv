@@ -1,15 +1,18 @@
 /* Open WebTV - 10-Foot Smart TV Media Center & Hybrid Player Stylesheet (styles.css) */
 .webtv-shell {
+  display: flex;
   display: grid;
   grid-template-columns: 340px 1fr;
   width: 100vw;
   height: 100vh;
-  background: #050811 url('/assets/background.svg') center / cover no-repeat;
+  background: #050811 url('background.svg') center / cover no-repeat;
   color: #f8fafc;
   overflow: hidden;
 }
 
 .webtv-sidebar {
+  width: 340px;
+  flex-shrink: 0;
   background: #111827;
   border-right: 1px solid rgba(148, 163, 184, 0.16);
   padding: 24px 18px;
@@ -158,6 +161,7 @@
 }
 
 .webtv-main {
+  flex: 1;
   display: flex;
   flex-direction: column;
   padding: 28px 36px;
@@ -253,12 +257,14 @@
 }
 
 .webtv-diagnostics {
+  display: flex;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 18px;
 }
 
 .webtv-panel {
+  flex: 1;
   background: #111827;
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 14px;
@@ -287,6 +293,10 @@
 /* Full-Screen Hybrid Video Player Overlay */
 .webtv-player-modal {
   position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   inset: 0;
   background: #000000;
   z-index: 500;
@@ -301,6 +311,10 @@
 
 .webtv-video-element {
   position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   inset: 0;
   width: 100%;
   height: 100%;
@@ -366,6 +380,10 @@
 /* Source Configuration Modal */
 .webtv-modal-backdrop {
   position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   inset: 0;
   background: rgba(2, 6, 23, 0.85);
   z-index: 400;

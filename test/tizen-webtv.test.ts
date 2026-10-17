@@ -20,11 +20,13 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import { createRequire } from 'node:module';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 
 import {
   createBackgroundPngBuffer,
@@ -36,13 +38,23 @@ import {
 import { createDevServer } from '../dev-server/index.ts';
 import {
   convertSrtToVtt,
+  createMediaCatalogManager,
   getBuiltInOpenStreams,
   parseM3uPlaylist,
   parseMediaFilename
 } from '../dev-server/media-catalog.ts';
+import {
+  cloneCatalogItem,
+  escapeHtml,
+  resolveServerUrl
+} from '../dev-server/public/app.ts';
 import * as OpenWebTVPlayer from '../dev-server/public/player.ts';
 import type { CatalogItem } from '../dev-server/types.ts';
 import { buildWgtPackage, ensureWidgetBinaryAssets } from '../scripts/build-wgt.ts';
+import {
+  transpileTsToTizenBrowserJs,
+  transpileTsToTizenServiceJs
+} from '../scripts/transpile-tizen.ts';
 import { validateProjectConfig } from '../scripts/validate-config.ts';
 import * as AppIPCBridge from '../src/app-ipc-bridge.ts';
 import * as ManifestLoader from '../src/manifest-loader.ts';
@@ -206,7 +218,10 @@ void test('2. ManifestLoader injects CSS into <head> and JS bundles into <body> 
   assert.equal(headNodes[0]?.rel, 'stylesheet');
   assert.equal(bodyNodes.length, 3);
   assert.equal(bodyNodes[0]?.src, 'https://cdn.example.org/assets/core.js');
+  assert.equal(bodyNodes[0]?.async, false);
+  assert.equal(bodyNodes[1]?.async, false);
   assert.equal(bodyNodes[2]?.src, 'https://cdn.example.org/assets/app.js');
+  assert.equal(bodyNodes[2]?.async, false);
 });
 
 void test('3. ManifestLoader retries on transient failure and invokes onError when retries exhausted', () => {
@@ -444,26 +459,45 @@ void test('6. Filename metadata parser, SRT-to-VTT converter, and M3U parser ext
   assert.equal(epMeta.videoCodec, 'H.264');
   assert.equal(epMeta.prefersAvPlay, false);
 
+  const webTitleMeta = parseMediaFilename(
+    "Charlotte's.Web.2006.1080p.WEB-DL.x264.AAC.mp4"
+  );
+  assert.equal(webTitleMeta.title, "Charlotte's Web");
+  assert.equal(webTitleMeta.year, 2006);
+
+  const bracketYearMeta = parseMediaFilename('The.Matrix.[1999].1080p.BluRay.mp4');
+  assert.equal(bracketYearMeta.title, 'The Matrix');
+  assert.equal(bracketYearMeta.year, 1999);
+
   const vtt = convertSrtToVtt(
-    '1\r\n00:01:15,250 --> 00:01:18,900\r\nHello from SMB share!\r\n'
+    '\uFEFF1\r\n0:01:15,250 --> 00:01:18,900\r\nHello from SMB share!\r\n'
   );
   assert.ok(vtt.startsWith('WEBVTT\n\n'));
-  assert.ok(vtt.includes('00:01:15.250 --> 00:01:18.900'));
+  assert.ok(vtt.includes('0:01:15.250 --> 00:01:18.900'));
 
-  const m3uItems = parseM3uPlaylist(
-    `#EXTM3U
+  const m3uText = `#EXTM3U
 #EXTINF:-1 tvg-logo="http://example.org/logo.png" group-title="Sci-Fi",Sci-Fi Live 1080p
 http://192.168.1.50:8080/live/scifi.m3u8
 #EXTINF:-1 group-title="Movies",Retro Cinema Channel
-http://192.168.1.50:8080/live/retro.m3u8`,
-    'Home IPTV'
-  );
+http://192.168.1.50:8080/live/retro.m3u8`;
+
+  const m3uItems = parseM3uPlaylist(m3uText, 'Home IPTV');
   assert.equal(m3uItems.length, 2);
   assert.equal(m3uItems[0]?.title, 'Sci-Fi Live 1080p');
   assert.equal(m3uItems[0]?.videoCodec, 'HLS');
   // Second M3U item without tvg-logo must receive its own unique media-<id>.svg poster & backdrop
   assert.match(m3uItems[1]?.image_url ?? '', /^\/assets\/posters\/media-m3u-/);
   assert.match(m3uItems[1]?.backdrop_url ?? '', /^\/assets\/backgrounds\/media-m3u-/);
+
+  // Verify M3U & custom stream deduplication in MediaCatalogManager
+  const mgr = createMediaCatalogManager();
+  mgr.addM3uContent(m3uText, 'Home IPTV');
+  mgr.addM3uContent(m3uText, 'Home IPTV');
+  mgr.addCustomStream({ title: 'NAS Test Stream', streamUrl: 'http://192.168.1.10/a.mp4' });
+  mgr.addCustomStream({ title: 'NAS Test Stream', streamUrl: 'http://192.168.1.10/a.mp4' });
+  const allCatalog = mgr.getAllItems();
+  const ids = allCatalog.map((i) => i.id);
+  assert.equal(new Set(ids).size, ids.length, 'Catalog item IDs must be 100% unique');
 });
 
 void test('7. Hybrid Video Player switches between Samsung AVPlay and HTML5 Video and resolves Deep-Links', () => {
@@ -616,6 +650,25 @@ void test('8. SMB directory scanner, HTTP 206 Byte-Range streaming, SRT subtitle
     assert.equal(rangeRes.headers['content-range'], `bytes 10-19/${videoBytes.length}`);
     assert.equal(rangeRes.body, 'ABCDEFGHIJ');
 
+    // Verify RFC 7233 suffix-byte-range-spec (bytes=-6 requests final 6 bytes)
+    const suffixRangeRes = await httpRequestRaw(`${baseUrl}/stream/${smbMovie.id}`, {
+      method: 'GET',
+      headers: { Range: 'bytes=-6' }
+    });
+    assert.equal(suffixRangeRes.statusCode, 206);
+    assert.equal(
+      suffixRangeRes.headers['content-range'],
+      `bytes ${videoBytes.length - 6}-${videoBytes.length - 1}/${videoBytes.length}`
+    );
+    assert.equal(suffixRangeRes.body, 'UVWXYZ');
+
+    // Verify invalid empty range (bytes=-) returns 416 Range Not Satisfiable
+    const emptyRangeRes = await httpRequestRaw(`${baseUrl}/stream/${smbMovie.id}`, {
+      method: 'GET',
+      headers: { Range: 'bytes=-' }
+    });
+    assert.equal(emptyRangeRes.statusCode, 416);
+
     const subRes = await httpRequestRaw(`${baseUrl}/subtitles/${smbMovie.id}.vtt`);
     assert.equal(subRes.statusCode, 200);
     assert.match(String(subRes.headers['content-type']), /text\/vtt/);
@@ -736,22 +789,163 @@ void test('10. TypeScript-to-Tizen JS transpilation and .wgt packaging produce v
     );
   }
 
-  // Verify the transpiled CommonJS service/service.js inside wgt-staging loads and executes via CommonJS require
-  const cjsRequire = crypto; // keep reference
-  assert.ok(cjsRequire);
-  const stagingServiceJs = fs.readFileSync(
-    path.join(rootDir, 'dist/wgt-staging/service/service.js'),
-    'utf8'
-  );
-  const stagingRequestJs = fs.readFileSync(
-    path.join(rootDir, 'dist/wgt-staging/service/request.js'),
-    'utf8'
-  );
-  assert.ok(stagingServiceJs.includes('onStart: onStart'));
-  assert.ok(stagingServiceJs.includes('createService: createService'));
-  assert.ok(stagingRequestJs.includes('get: get'));
+  // 1. Actually load and execute the transpiled CommonJS service/service.js via Node createRequire
+  const requireCjs = createRequire(import.meta.url);
+  const compiledServicePath = path.join(rootDir, 'dist/wgt-staging/service/service.js');
+  const compiledServiceMod = requireCjs(compiledServicePath) as typeof TizenService;
+  assert.equal(typeof compiledServiceMod.createService, 'function');
+  assert.equal(typeof compiledServiceMod.onStart, 'function');
+  assert.equal(typeof compiledServiceMod.validatePreviewPayload, 'function');
+  assert.equal(compiledServiceMod.validatePreviewPayload(samplePreview), true);
+  assert.equal(compiledServiceMod.validatePreviewPayload({ sections: [] }), false);
 
-  // Verify dev-server serves transpiled JS for /app-ipc-bridge.js, /manifest-loader.js, /assets/player.js, /assets/app.js
+  const cjsLogs: string[] = [];
+  const cjsSvcInstance = compiledServiceMod.createService({
+    tizen: null,
+    webapis: null,
+    remoteLogger: {
+      log: (msg: string): void => {
+        cjsLogs.push(msg);
+      }
+    }
+  });
+  cjsSvcInstance.onStart();
+  cjsSvcInstance.onExit();
+  assert.ok(cjsLogs.includes('Service onStart'));
+  assert.ok(cjsLogs.includes('Service onExit'));
+
+  // 2. Enforce strict ES5 syntax gate across all 8 emitted Tizen JS bundles
+  const emittedJsFiles = [
+    'dist/wgt-staging/app-ipc-bridge.js',
+    'dist/wgt-staging/manifest-loader.js',
+    'dist/wgt-staging/service/service.js',
+    'dist/wgt-staging/service/request.js',
+    'dist/wgt-staging/service/remoteLogger.js',
+    'dist/public/core.js',
+    'dist/public/player.js',
+    'dist/public/app.js'
+  ];
+
+  for (const relPath of emittedJsFiles) {
+    const fullPath = path.join(rootDir, relPath);
+    const jsCode = fs.readFileSync(fullPath, 'utf8');
+    const codeWithoutComments = jsCode.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
+
+    assert.equal(
+      /\?\./.test(codeWithoutComments),
+      false,
+      `${relPath} must not contain ES2020 optional chaining (?.)`
+    );
+    assert.equal(
+      /\?\?/.test(codeWithoutComments),
+      false,
+      `${relPath} must not contain ES2020 nullish coalescing (??)`
+    );
+    assert.equal(
+      /=>/.test(codeWithoutComments),
+      false,
+      `${relPath} must not contain ES6 arrow functions (=>)`
+    );
+    assert.equal(
+      /\b(const|let)\b/.test(codeWithoutComments),
+      false,
+      `${relPath} must not contain ES6 const/let declarations`
+    );
+    assert.equal(
+      /`/.test(codeWithoutComments),
+      false,
+      `${relPath} must not contain ES6 template literals`
+    );
+    assert.equal(
+      /\b(import|export)\b/.test(codeWithoutComments),
+      false,
+      `${relPath} must not contain untranspiled ES module import/export keywords`
+    );
+  }
+
+  // 3. Execute transpiled browser IIFE bundles inside a VM sandbox
+  const sandboxWindow: Record<string, unknown> = {
+    OPEN_WEBTV_DISABLE_AUTOBOOT: true,
+    addEventListener: (): void => {}
+  };
+  const vmContext = vm.createContext({
+    window: sandboxWindow,
+    document: {
+      readyState: 'complete',
+      addEventListener: (): void => {},
+      getElementById: (): null => null
+    },
+    console,
+    setTimeout,
+    clearTimeout
+  });
+
+  for (const browserBundle of [
+    'dist/wgt-staging/app-ipc-bridge.js',
+    'dist/wgt-staging/manifest-loader.js',
+    'dist/public/core.js',
+    'dist/public/player.js'
+  ]) {
+    const code = fs.readFileSync(path.join(rootDir, browserBundle), 'utf8');
+    vm.runInContext(code, vmContext, { filename: browserBundle });
+  }
+
+  assert.ok(sandboxWindow.AppIPCBridge, 'VM must attach window.AppIPCBridge');
+  assert.ok(sandboxWindow.ManifestLoader, 'VM must attach window.ManifestLoader');
+  assert.ok(
+    sandboxWindow.__OPEN_WEBTV_RUNTIME__,
+    'VM must attach window.__OPEN_WEBTV_RUNTIME__'
+  );
+  assert.ok(sandboxWindow.OpenWebTVPlayer, 'VM must attach window.OpenWebTVPlayer');
+
+  // 4. Test transpiler downleveling of ES2020+/TypeScript edge cases directly
+  const complexTsSample = `
+    import type { ServiceConfig } from '../src/types/tizen.ts';
+    import {
+      get as httpGet,
+      type RequestOptions
+    } from './request.ts';
+    export interface SampleBox {
+      readonly label?: string;
+    }
+    export const computeGreeting = (box?: SampleBox | null): string => {
+      const label = box?.label ?? 'Default';
+      const merged = Object.assign({}, { tag: \`[\${label}]\` });
+      return merged.tag;
+    };
+    export {
+      type SampleBox,
+      httpGet
+    };
+  `;
+  const transpiledCjs = transpileTsToTizenServiceJs(complexTsSample);
+  assert.ok(!transpiledCjs.includes('?.'));
+  assert.ok(!transpiledCjs.includes('??'));
+  assert.ok(!transpiledCjs.includes('=>'));
+  assert.ok(!/\b(const|let)\b/.test(transpiledCjs));
+  assert.ok(transpiledCjs.includes('__assign'));
+  assert.ok(transpiledCjs.includes('computeGreeting: computeGreeting'));
+  assert.ok(transpiledCjs.includes('httpGet: httpGet'));
+
+  const transpiledBrowser = transpileTsToTizenBrowserJs(complexTsSample);
+  assert.ok(transpiledBrowser.startsWith('(function () {'));
+  assert.ok(!transpiledBrowser.includes('?.'));
+
+  // 5. Verify UI security & widget-origin helpers (escapeHtml, cloneCatalogItem, resolveServerUrl)
+  assert.equal(
+    escapeHtml('<script>alert("xss" & \'test\')</script>'),
+    '&lt;script&gt;alert(&quot;xss&quot; &amp; &#39;test&#39;)&lt;/script&gt;'
+  );
+  assert.equal(
+    resolveServerUrl('/api/catalog', 'http://192.168.1.50:4000/'),
+    'http://192.168.1.50:4000/api/catalog'
+  );
+  const sampleItem = getBuiltInOpenStreams()[0]!;
+  const cloned = cloneCatalogItem(sampleItem, { isFavorite: true });
+  assert.equal(cloned.id, sampleItem.id);
+  assert.equal(cloned.isFavorite, true);
+
+  // 6. Verify dev-server serves transpiled JS for /app-ipc-bridge.js, /manifest-loader.js, /assets/player.js, /assets/app.js
   const { server } = createDevServer({ silent: true });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as AddressInfo;
@@ -771,6 +965,10 @@ void test('10. TypeScript-to-Tizen JS transpilation and .wgt packaging produce v
       assert.ok(
         !res.body.includes('import type'),
         `${jsRoute} must have all TypeScript syntax stripped`
+      );
+      assert.ok(
+        !res.body.includes('?.'),
+        `${jsRoute} must not contain ES2020 optional chaining`
       );
     }
 
