@@ -1,0 +1,41 @@
+{
+  "sections": [
+    {
+      "title": "Featured Open Streams",
+      "tiles": [
+        {
+          "title": "Big Buck Bunny (Open Movie)",
+          "subtitle": "Blender Foundation • 1080p H.264",
+          "image_ratio": "16by9",
+          "image_url": "http://127.0.0.1:4000/assets/posters/big-buck-bunny.svg",
+          "action_data": "watch/open-big-buck-bunny",
+          "is_playable": true
+        },
+        {
+          "title": "Sintel (Open Fantasy)",
+          "subtitle": "Blender Foundation • 1080p H.264",
+          "image_ratio": "16by9",
+          "image_url": "http://127.0.0.1:4000/assets/posters/sintel.svg",
+          "action_data": "watch/open-sintel",
+          "is_playable": true
+        },
+        {
+          "title": "Tears of Steel (Sci-Fi)",
+          "subtitle": "Blender Open Project • 1080p H.264",
+          "image_ratio": "16by9",
+          "image_url": "http://127.0.0.1:4000/assets/posters/tears-of-steel.svg",
+          "action_data": "watch/open-tears-of-steel",
+          "is_playable": true
+        },
+        {
+          "title": "Elephants Dream",
+          "subtitle": "Blender Institute • 1080p H.264",
+          "image_ratio": "16by9",
+          "image_url": "http://127.0.0.1:4000/assets/posters/cosmos-laundromat.svg",
+          "action_data": "watch/open-elephants-dream",
+          "is_playable": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Open WebTV</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html, body {
+        width: 100%;
+        height: 100%;
+        background-color: #0b0f19;
+        color: #f8fafc;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        overflow: hidden;
+        user-select: none;
+      }
+      #app-root {
+        width: 100%;
+        height: 100%;
+        position: relative;
+      }
+      .boot-screen {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at center, #1e293b 0%, #0b0f19 75%);
+        z-index: 100;
+        transition: opacity 0.35s ease;
+      }
+      .boot-screen.hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .boot-logo {
+        width: 88px;
+        height: 88px;
+        border-radius: 20px;
+        background: linear-gradient(135deg, #38bdf8, #6366f1);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 36px;
+        font-weight: 800;
+        letter-spacing: -1px;
+        color: #ffffff;
+        margin-bottom: 28px;
+        box-shadow: 0 16px 40px rgba(56, 189, 248, 0.25);
+      }
+      .boot-title {
+        font-size: 32px;
+        font-weight: 700;
+        margin-bottom: 12px;
+      }
+      .boot-status {
+        font-size: 18px;
+        color: #94a3b8;
+        margin-bottom: 28px;
+      }
+      .spinner {
+        width: 44px;
+        height: 44px;
+        border: 4px solid rgba(148, 163, 184, 0.2);
+        border-top-color: #38bdf8;
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      .fallback-panel {
+        display: none;
+        margin-top: 24px;
+        padding: 28px 36px;
+        background: rgba(15, 23, 42, 0.85);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 16px;
+        text-align: center;
+        max-width: 640px;
+      }
+      .fallback-panel.visible {
+        display: block;
+      }
+      .fallback-message {
+        font-size: 18px;
+        color: #cbd5e1;
+        margin-bottom: 24px;
+        line-height: 1.5;
+      }
+      .fallback-actions {
+        display: flex;
+        gap: 16px;
+        justify-content: center;
+      }
+      .tv-btn {
+        padding: 14px 28px;
+        font-size: 18px;
+        font-weight: 600;
+        border-radius: 10px;
+        border: 2px solid transparent;
+        background: #1e293b;
+        color: #f8fafc;
+        cursor: pointer;
+        outline: none;
+      }
+      .tv-btn:focus,
+      .tv-btn.focused {
+        background: #38bdf8;
+        color: #0f172a;
+        border-color: #ffffff;
+        box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.4);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app-root">
+      <div id="boot-screen" class="boot-screen">
+        <div class="boot-logo">TV</div>
+        <h1 class="boot-title">Open WebTV</h1>
+        <p id="boot-status" class="boot-status">Connecting to media server...</p>
+        <div id="boot-spinner" class="spinner"></div>
+        <div id="fallback-panel" class="fallback-panel" role="alert">
+          <p id="fallback-message" class="fallback-message">
+            Unable to reach the remote application manifest. Check your network connection or try again.
+          </p>
+          <div class="fallback-actions">
+            <button id="btn-retry" class="tv-btn focused" type="button">Retry Connection</button>
+            <button id="btn-exit" class="tv-btn" type="button">Exit App</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Samsung Tizen WebAPI (injected by TV firmware when running on hardware/emulator) -->
+    <script src="$WEBAPIS/webapis/webapis.js" type="text/javascript"></script>
+    <script src="app-ipc-bridge.js" type="text/javascript"></script>
+    <script src="manifest-loader.js" type="text/javascript"></script>
+  </body>
+</html>

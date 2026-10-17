@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.wgt
+src/.sign/
+packages/*.p12
+.idea/
+.DS_Store
+*.log

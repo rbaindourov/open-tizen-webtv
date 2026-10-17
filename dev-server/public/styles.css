@@ -1,0 +1,403 @@
+/* Open WebTV - 10-Foot Smart TV Media Center & Hybrid Player Stylesheet (styles.css) */
+.webtv-shell {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  width: 100vw;
+  height: 100vh;
+  background: #0b0f19;
+  color: #f8fafc;
+  overflow: hidden;
+}
+
+.webtv-sidebar {
+  background: #111827;
+  border-right: 1px solid rgba(148, 163, 184, 0.16);
+  padding: 24px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+
+.webtv-brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.webtv-brand-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.webtv-brand-badge {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #38bdf8, #6366f1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 18px;
+  color: #ffffff;
+}
+
+.webtv-brand-title {
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.webtv-brand-sub {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.webtv-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.webtv-tab-btn {
+  padding: 6px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: #1e293b;
+  color: #cbd5e1;
+  cursor: pointer;
+}
+
+.webtv-tab-btn.active {
+  background: #38bdf8;
+  color: #0f172a;
+  border-color: #38bdf8;
+}
+
+.webtv-search-input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: 14px;
+  outline: none;
+}
+
+.webtv-search-input:focus {
+  border-color: #38bdf8;
+}
+
+.webtv-channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.webtv-channel-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px 14px;
+  border-radius: 11px;
+  background: rgba(30, 41, 59, 0.65);
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.14s ease, background 0.14s ease, border-color 0.14s ease;
+}
+
+.webtv-channel-card.active {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: #38bdf8;
+  transform: translateX(3px);
+}
+
+.webtv-channel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.webtv-channel-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.webtv-fav-star {
+  color: #facc15;
+  font-size: 14px;
+}
+
+.webtv-channel-meta {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.webtv-progress-bar {
+  height: 4px;
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.webtv-progress-fill {
+  height: 100%;
+  background: #38bdf8;
+}
+
+.webtv-main {
+  display: flex;
+  flex-direction: column;
+  padding: 28px 36px;
+  gap: 20px;
+  overflow-y: auto;
+}
+
+.webtv-stage {
+  position: relative;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #020617;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  min-height: 350px;
+  display: flex;
+  align-items: flex-end;
+  background-size: cover;
+  background-position: center;
+}
+
+.webtv-stage-overlay {
+  width: 100%;
+  padding: 28px 32px;
+  background: linear-gradient(to top, rgba(2, 6, 23, 0.96) 15%, rgba(2, 6, 23, 0.25));
+}
+
+.webtv-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.webtv-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(56, 189, 248, 0.2);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  color: #e0f2fe;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+
+.webtv-badge.avplay {
+  background: rgba(168, 85, 247, 0.22);
+  border-color: rgba(168, 85, 247, 0.5);
+  color: #f3e8ff;
+}
+
+.webtv-stage-title {
+  font-size: 32px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+
+.webtv-stage-desc {
+  font-size: 15px;
+  color: #cbd5e1;
+  max-width: 780px;
+  line-height: 1.45;
+  margin-bottom: 18px;
+}
+
+.webtv-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.webtv-btn {
+  padding: 12px 22px;
+  font-size: 15px;
+  font-weight: 700;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background: #1e293b;
+  color: #f8fafc;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.webtv-btn.primary {
+  background: #38bdf8;
+  color: #0f172a;
+}
+
+.webtv-btn:hover,
+.webtv-btn:focus {
+  border-color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.webtv-diagnostics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.webtv-panel {
+  background: #111827;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 14px;
+  padding: 16px 20px;
+}
+
+.webtv-panel h3 {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #38bdf8;
+  margin-bottom: 10px;
+}
+
+.webtv-log-list {
+  font-family: monospace;
+  font-size: 12.5px;
+  color: #cbd5e1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 165px;
+  overflow-y: auto;
+}
+
+/* Full-Screen Hybrid Video Player Overlay */
+.webtv-player-modal {
+  position: fixed;
+  inset: 0;
+  background: #000000;
+  z-index: 500;
+  display: none;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.webtv-player-modal.open {
+  display: flex;
+}
+
+.webtv-video-element {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #000000;
+}
+
+.webtv-subtitle-overlay {
+  position: absolute;
+  bottom: 120px;
+  left: 10%;
+  right: 10%;
+  text-align: center;
+  font-size: 26px;
+  font-weight: 600;
+  color: #ffffff;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.95);
+  pointer-events: none;
+  z-index: 510;
+}
+
+.webtv-osd-top,
+.webtv-osd-bottom {
+  position: relative;
+  z-index: 520;
+  padding: 24px 36px;
+  background: linear-gradient(to bottom, rgba(2, 6, 23, 0.9), transparent);
+}
+
+.webtv-osd-bottom {
+  background: linear-gradient(to top, rgba(2, 6, 23, 0.95), transparent);
+}
+
+.webtv-osd-progress-track {
+  width: 100%;
+  height: 8px;
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 14px;
+  cursor: pointer;
+}
+
+.webtv-osd-progress-fill {
+  height: 100%;
+  background: #38bdf8;
+  width: 0%;
+}
+
+.webtv-osd-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.webtv-osd-btn-group {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Source Configuration Modal */
+.webtv-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.85);
+  z-index: 400;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.webtv-modal-backdrop.open {
+  display: flex;
+}
+
+.webtv-modal-card {
+  width: 100%;
+  max-width: 580px;
+  background: #111827;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 16px;
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.webtv-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.webtv-form-group label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #cbd5e1;
+}
